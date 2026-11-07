@@ -1,6 +1,6 @@
 import { getPrisma, Prisma } from '@cronapp/database';
 import type { TemplateContext } from '@cronapp/templating';
-import { deliverToChannel, templateChannelFor } from './alerts';
+import { deliverToChannel } from './alerts';
 import { notifyTenant } from './notifications';
 import { renderFromRows, type TemplateRow } from './templates';
 
@@ -134,7 +134,7 @@ async function alertHeartbeatMiss(job: MissedJob): Promise<void> {
   if (channels.length === 0) return;
 
   for (const channel of channels) {
-    const rendered = renderFromRows(templates, 'heartbeat.missed', templateChannelFor(channel.type), tctx);
+    const rendered = renderFromRows(templates, 'heartbeat.missed', channel.type, tctx);
     await deliverToChannel(channel, rendered).catch((e) =>
       console.error(`[heartbeat] delivery failed (channel ${channel.id}):`, e?.message ?? e),
     );

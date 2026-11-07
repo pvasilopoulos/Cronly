@@ -5,7 +5,7 @@
 // per-channel defaults and a sample context all live here so the editor and the
 // renderer never drift.
 
-export type TemplateChannel = 'INAPP' | 'EMAIL' | 'SLACK' | 'WEBHOOK';
+export type TemplateChannel = 'INAPP' | 'EMAIL' | 'SLACK' | 'WEBHOOK' | 'TELEGRAM';
 export type TemplateEvent = 'job.failed' | 'job.timeout' | 'job.dead_letter' | 'heartbeat.missed';
 
 export const TEMPLATE_EVENTS: { key: TemplateEvent; label: string; severity: string }[] = [
@@ -20,6 +20,7 @@ export const TEMPLATE_CHANNELS: { key: TemplateChannel; label: string; hasSubjec
   { key: 'EMAIL', label: 'Email', hasSubject: true, json: false, note: 'Subject is the email subject line; body is the plain-text message.' },
   { key: 'SLACK', label: 'Slack', hasSubject: false, json: false, note: 'Body is the text posted to the Slack channel.' },
   { key: 'WEBHOOK', label: 'Webhook', hasSubject: false, json: true, note: 'Body is a JSON template; variables are JSON-escaped. Must be valid JSON once rendered.' },
+  { key: 'TELEGRAM', label: 'Telegram', hasSubject: false, json: false, note: 'Body is the text sent to the Telegram chat.' },
 ];
 
 export interface TemplateVariable {
@@ -75,6 +76,9 @@ for (const ev of ['job.failed', 'job.timeout', 'job.dead_letter'] as TemplateEve
   def(ev, 'SLACK', {
     body: '🔴 CronApp: job "{{ job.name }}" {{ run.status }} ({{ consecutive }} consecutive) — run {{ run.id }}',
   });
+  def(ev, 'TELEGRAM', {
+    body: '🔴 CronApp\nJob "{{ job.name }}" {{ run.status }} ({{ consecutive }} consecutive)\nRun: {{ run.id }}\nError: {{ run.error || "—" }}',
+  });
   def(ev, 'WEBHOOK', {
     body: '{\n  "event": "{{ event }}",\n  "job": "{{ job.name }}",\n  "jobId": "{{ job.id }}",\n  "runId": "{{ run.id }}",\n  "status": "{{ run.status }}",\n  "consecutive": {{ consecutive }}\n}',
   });
@@ -90,6 +94,9 @@ def('heartbeat.missed', 'EMAIL', {
 });
 def('heartbeat.missed', 'SLACK', {
   body: '🟠 CronApp: job "{{ job.name }}" missed its heartbeat — no ping or successful run in over {{ heartbeat.overdueSec }}s',
+});
+def('heartbeat.missed', 'TELEGRAM', {
+  body: '🟠 CronApp\nJob "{{ job.name }}" missed its heartbeat — no ping or successful run in over {{ heartbeat.overdueSec }}s',
 });
 def('heartbeat.missed', 'WEBHOOK', {
   body: '{\n  "event": "heartbeat.missed",\n  "job": "{{ job.name }}",\n  "jobId": "{{ job.id }}",\n  "overdueSec": {{ heartbeat.overdueSec }}\n}',

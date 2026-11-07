@@ -123,17 +123,10 @@ interface AlertEvent {
   consecutive: number;
 }
 
-// Telegram messages are plain text like Slack, so they reuse the SLACK template
-// rather than needing their own template channel key.
-export function templateChannelFor(type: string): 'EMAIL' | 'SLACK' | 'WEBHOOK' {
-  return type === 'TELEGRAM' ? 'SLACK' : (type as 'EMAIL' | 'SLACK' | 'WEBHOOK');
-}
-
 async function deliver(channel: any, ev: AlertEvent): Promise<void> {
   // Render the per-channel template (override or default) for this failure and
-  // deliver it. The channel type maps 1:1 to a template channel key (TELEGRAM
-  // borrows SLACK's plain-text template).
-  const rendered = renderFromRows(ev.templates, ev.event, templateChannelFor(channel.type), ev.tctx);
+  // deliver it. The channel type maps 1:1 to a template channel key.
+  const rendered = renderFromRows(ev.templates, ev.event, channel.type, ev.tctx);
   await deliverToChannel(channel, rendered);
 }
 
