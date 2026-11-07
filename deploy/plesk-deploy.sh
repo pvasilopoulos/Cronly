@@ -11,8 +11,13 @@
 # Everything real happens here, in one bash process, with all output captured to
 # deploy.log in the repo root (open it from Plesk File Manager).
 
-# Run from the repo root (this file lives in deploy/).
-cd "$(dirname "$0")/.." || exit 1
+# Plesk runs deployment actions with a near-empty PATH (even dirname/ls are
+# missing), so establish a normal one before using any external command.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
+
+# Run from the repo root (this file lives in deploy/). Use bash-native path
+# handling so it works even before PATH is trusted.
+cd "${BASH_SOURCE[0]%/*}/.." || exit 1
 exec > deploy.log 2>&1
 set -x
 
