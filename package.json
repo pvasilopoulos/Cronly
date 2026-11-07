@@ -1,0 +1,35 @@
+{
+  "name": "cronapp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-tenant advanced cron job management platform",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "db:generate": "npm run generate -w @cronapp/database",
+    "db:migrate": "npm run migrate -w @cronapp/database",
+    "db:seed": "npm run seed -w @cronapp/database",
+    "db:studio": "npm run studio -w @cronapp/database",
+    "dev:api": "npm run dev -w @cronapp/api",
+    "dev:scheduler": "npm run dev -w @cronapp/scheduler",
+    "dev:worker": "npm run dev -w @cronapp/worker",
+    "dev": "concurrently -n api,scheduler,worker -c blue,magenta,green \"npm:dev:api\" \"npm:dev:scheduler\" \"npm:dev:worker\"",
+    "db:migrate:deploy": "npm run migrate:deploy -w @cronapp/database",
+    "db:rls": "npm run rls -w @cronapp/database",
+    "lint": "npm run lint -w @cronapp/web",
+    "typecheck": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "test:integration": "npm run test:integration -w @cronapp/api"
+  },
+  "devDependencies": {
+    "concurrently": "9.1.0",
+    "tsx": "4.19.2",
+    "typescript": "5.7.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

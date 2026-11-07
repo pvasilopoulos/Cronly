@@ -1,0 +1,29 @@
+{
+  "name": "@cronapp/worker",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "ts-node src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@cronapp/database": "0.1.0",
+    "@cronapp/mailer": "0.1.0",
+    "@cronapp/handlers": "0.1.0",
+    "@cronapp/rbac": "0.1.0",
+    "@cronapp/storage": "0.1.0",
+    "bullmq": "5.34.5",
+    "nodemailer": "6.9.16",
+    "web-push": "3.6.7",
+    "@cronapp/templating": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.5",
+    "@types/nodemailer": "6.4.17",
+    "@types/web-push": "3.6.4",
+    "ts-node": "10.9.2",
+    "typescript": "5.7.3"
+  }
+}

@@ -1,0 +1,636 @@
+// CronApp data model — multi-tenant cron platform with fine-grained RBAC.
+//
+// Tenancy model: shared database, every tenant-scoped row carries `tenantId`.
+// PostgreSQL Row-Level Security (see prisma/rls.sql) enforces isolation at the
+// database layer, so an application query that forgets a tenant filter still
+// cannot read or write another tenant's rows.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────── Enums ───────────────────────────
+
+enum TenantPlan {
+  STARTER
+  PRO
+  SCALE
+  ENTERPRISE
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  TRIAL
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  DISABLED
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  SUSPENDED
+}
+
+enum JobStatus {
+  ACTIVE
+  PAUSED
+}
+
+enum RunStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  WARNING
+  FAILED
+  TIMEOUT
+  DEAD_LETTER
+}
+
+// A per-user permission tweak layered on top of role permissions.
+enum PermissionEffect {
+  GRANT
+  DENY
+}
+
+enum ChannelType {
+  EMAIL
+  SLACK
+  WEBHOOK
+}
+
+// Heartbeat (dead-man's-switch) state for a job: OK while pings/successes arrive
+// on time, MISSING once the expected interval + grace elapses without one.
+enum HeartbeatState {
+  OK
+  MISSING
+}
+
+// ─────────────────────────── Tenancy ───────────────────────────
+
+model Tenant {
+  id        String       @id @default(cuid())
+  name      String
+  slug      String       @unique
+  plan      TenantPlan   @default(STARTER)
+  status    TenantStatus @default(TRIAL)
+  timezone  String       @default("Europe/Athens")
+
+  // Feature gating: what this tenant is allowed to access at all. The effective
+  // permission of any member is intersected with this list, so a plan downgrade
+  // instantly hides features regardless of role.
+  features  String[]     @default([])
+
+  // Free-form tenant settings (retention override, concurrency cap, etc.)
+  settings  Json         @default("{}")
+
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  memberships Membership[]
+  roles       Role[]
+  jobs        Job[]
+  runs        JobRun[]
+  auditLogs   AuditLog[]
+  secrets     Secret[]
+  channels    NotificationChannel[]
+  alertRules  AlertRule[]
+  apiKeys     ApiKey[]
+
+  @@index([status])
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  name         String
+  passwordHash String
+  status       UserStatus @default(ACTIVE)
+
+  // Platform super-admin (your staff) — bypasses tenant scoping. Never granted
+  // to customers. Kept off the RLS path entirely.
+  isSuperAdmin Boolean    @default(false)
+
+  // Two-factor auth (TOTP, RFC 6238). `totpSecret` is the active base32 secret
+  // once `totpEnabled`; `totpPendingSecret` holds an in-progress enrolment until
+  // the user confirms a code. `backupCodes` are one-time recovery codes, stored
+  // hashed (never plaintext) and removed as they are consumed.
+  totpEnabled       Boolean  @default(false)
+  totpSecret        String?
+  totpPendingSecret String?
+  backupCodes       String[] @default([])
+
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  memberships   Membership[]
+  auditLogs     AuditLog[]
+  refreshTokens RefreshToken[]
+  passwordResets PasswordResetToken[]
+
+  @@index([status])
+}
+
+// A rotating refresh-token session. The opaque token is never stored — only its
+// SHA-256 hash. Each refresh rotates: the presented token is revoked and a new
+// one issued in the same `familyId`. Presenting an already-revoked token (reuse)
+// means it was stolen, so the whole family is revoked (the session is killed).
+// Identity-scoped, so no RLS — like User.
+model RefreshToken {
+  id           String    @id @default(cuid())
+  userId       String
+  familyId     String    // groups one login session across rotations
+  tokenHash    String    @unique // sha256 hex of the opaque token
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?   // the token this one was rotated into
+  userAgent    String?
+  ip           String?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+}
+
+// A single-use password-reset token. Only the SHA-256 hash is stored; the token
+// is emailed (or dev-logged) to the user. Consumed on use, and all of the user's
+// refresh-token sessions are revoked when the password changes.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// A user's presence inside one tenant. Users can belong to many tenants, each
+// with its own roles — this is the join that makes the app multi-tenant.
+model Membership {
+  id        String           @id @default(cuid())
+  userId    String
+  tenantId  String
+  status    MembershipStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant    Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  roles       MembershipRole[]
+  overrides   PermissionOverride[]
+
+  @@unique([userId, tenantId])
+  @@index([tenantId])
+}
+
+// ─────────────────────────── RBAC ───────────────────────────
+
+// A role groups permission keys. Roles live inside a tenant; system roles
+// (isSystem=true) are seeded per tenant from templates (Owner, Operator, …)
+// and cannot be deleted, but a tenant may also create fully custom roles.
+model Role {
+  id          String  @id @default(cuid())
+  tenantId    String
+  key         String  // e.g. "owner", "operator", "custom-billing"
+  name        String
+  description String?
+  isSystem    Boolean @default(false)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+  members     MembershipRole[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model RolePermission {
+  id         String @id @default(cuid())
+  roleId     String
+  // A key from the permission catalog, e.g. "jobs:run", "responses:download".
+  permission String
+
+  // Optional CASL conditions that narrow WHAT the holder sees, as JSON, e.g.
+  // { "tags": { "$in": ["billing"] } } to limit to jobs tagged "billing".
+  conditions Json?
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permission])
+  @@index([roleId])
+}
+
+model MembershipRole {
+  membershipId String
+  roleId       String
+
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([membershipId, roleId])
+  @@index([roleId])
+}
+
+// Per-user fine-grained override. GRANT adds a permission the user's roles do
+// not have; DENY removes one they would otherwise inherit. This is how you tune
+// a single person's access "αναλυτικά" without inventing a new role.
+model PermissionOverride {
+  id           String           @id @default(cuid())
+  membershipId String
+  permission   String
+  effect       PermissionEffect
+  conditions   Json?
+  createdAt    DateTime         @default(now())
+
+  membership Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, permission])
+  @@index([membershipId])
+}
+
+// ─────────────────────────── Jobs ───────────────────────────
+
+model Job {
+  id             String    @id @default(cuid())
+  tenantId       String
+  name           String
+  slug           String
+  handler        String    // registered handler key, e.g. "http.request"
+  cronExpr       String    // standard 5-field cron
+  timezone       String    @default("Europe/Athens")
+  payload        Json      @default("{}")
+  tags           String[]  @default([])
+  // Optional grouping label, e.g. "ETL", "Billing" — the console groups jobs by
+  // this in the list view. Free-form; null means "Ungrouped".
+  group          String?
+
+  status         JobStatus @default(ACTIVE)
+  enabled        Boolean   @default(true)
+
+  // Optional human context, surfaced in the console and in failure alerts.
+  description    String?   // free-text note about what this job does
+  runbookUrl     String?   // link to an on-call runbook / playbook
+
+  // Optional schedule window. Outside [startsAt, endsAt] the scheduler never
+  // claims the job, even while it stays ACTIVE — null on either side means
+  // "open-ended" on that side.
+  startsAt       DateTime?
+  endsAt         DateTime?
+
+  // Scheduling bookkeeping — Postgres is the source of truth, not Redis.
+  nextRunAt      DateTime?
+  lastRunAt      DateTime?
+  lockedAt       DateTime? // set when a scheduler tick claims this row
+  lockedBy       String?   // scheduler instance id holding the claim
+
+  maxRetries     Int       @default(3)
+  timeoutMs      Int       @default(30000)
+  // Jobs sharing a concurrencyKey never run in parallel (per tenant).
+  concurrencyKey String?
+
+  // ── Heartbeat / dead-man's-switch ──
+  // When enabled, the job must report liveness at least every
+  // heartbeatIntervalSec — via an inbound ping (POST /ping/:token) or a
+  // successful run. If heartbeatIntervalSec + heartbeatGraceSec elapse without
+  // one, the monitor flips state to MISSING and raises an alert.
+  heartbeatEnabled     Boolean        @default(false)
+  heartbeatToken       String?        @unique
+  heartbeatIntervalSec Int?
+  heartbeatGraceSec    Int            @default(60)
+  lastPingAt           DateTime?
+  heartbeatState       HeartbeatState @default(OK)
+  heartbeatAlertedAt   DateTime?
+
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenant Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  runs   JobRun[]
+
+  @@unique([tenantId, slug])
+  @@index([tenantId])
+  // The scheduler's hot query: due & enabled jobs, ordered by next_run_at.
+  @@index([enabled, status, nextRunAt])
+  @@index([tenantId, tags])
+  @@index([tenantId, group])
+}
+
+model JobRun {
+  id          String    @id @default(cuid())
+  jobId       String
+  tenantId    String
+
+  status      RunStatus @default(QUEUED)
+  attempt     Int       @default(1)
+  scheduledAt DateTime
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  durationMs  Int?
+
+  // ─ Response storage ─
+  // Small payloads live inline in Postgres; large ones go to object storage and
+  // only metadata + a short preview stay here, so lists & queries stay fast.
+  contentType    String?  // e.g. "application/json", "text/plain"
+  responseSize   BigInt?  // bytes
+  storageKey     String?  // object-storage path when offloaded (null if inline)
+  responseInline Bytes?   // gzipped body when small enough to inline
+  preview        String?  // first ~2 KB, for snippets in the runs list
+  truncated      Boolean  @default(false)
+
+  error       String?
+  logsKey     String?   // optional separate object-storage key for logs
+
+  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, scheduledAt(sort: Desc)])
+  @@index([tenantId, scheduledAt(sort: Desc)])
+  @@index([status])
+}
+
+// ─────────────────────────── Audit ───────────────────────────
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  tenantId    String
+  actorUserId String?
+  action      String   // e.g. "job.created", "role.updated", "member.invited"
+  target      String?  // id of the affected entity
+  meta        Json     @default("{}")
+  createdAt   DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  actor  User?  @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt(sort: Desc)])
+}
+
+// ─────────────────────────── Secrets ───────────────────────────
+
+// Encrypted per-tenant secrets, referenced from job payloads as {{secret:NAME}}
+// and resolved by the worker at execution time only. The plaintext is AES-256-GCM
+// encrypted at rest and is NEVER returned by the API.
+model Secret {
+  id         String   @id @default(cuid())
+  tenantId   String
+  name       String   // referenced as {{secret:NAME}}
+  ciphertext Bytes    // AES-256-GCM ciphertext
+  iv         Bytes    // 12-byte nonce
+  authTag    Bytes    // 16-byte GCM auth tag
+  hint       String?  // safe-to-display label (e.g. last 4 chars)
+  createdBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+}
+
+// ─────────────────────── Alerting / Notifications ───────────────────────
+
+model NotificationChannel {
+  id            String      @id @default(cuid())
+  tenantId      String
+  type          ChannelType
+  name          String
+  // Destination: email address, Slack incoming-webhook URL, or generic webhook URL.
+  target        String
+  // Optional shared secret used to HMAC-sign outgoing webhook payloads.
+  signingSecret String?
+  enabled       Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  tenant Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rules  AlertRule[]
+
+  @@index([tenantId])
+}
+
+// ─────────────────────── API keys (programmatic access) ───────────────────────
+
+// A per-tenant API key for the public REST API. The plaintext token is shown
+// to the creator exactly once; only its SHA-256 hash is stored, so a database
+// or backup leak cannot reconstruct a working key. `scopes` is a subset of the
+// permission catalog — a key can never exceed the permissions listed here, and
+// those are further intersected with the tenant's plan features at request time.
+model ApiKey {
+  id         String    @id @default(cuid())
+  tenantId   String
+  name       String
+  // Non-secret display prefix, e.g. "cak_a1b2c3d4" — shown in the UI to identify
+  // a key without revealing it.
+  prefix     String
+  // SHA-256 (hex) of the full token. Unique so verification is a single indexed
+  // lookup; never reversible to the token.
+  hash       String    @unique
+  // Permission keys this key may exercise (from the catalog).
+  scopes     String[]  @default([])
+  createdBy  String?
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model AlertRule {
+  id         String      @id @default(cuid())
+  tenantId   String
+  channelId  String
+  // null jobId → applies to every job in the tenant.
+  jobId      String?
+  // Fire after this many consecutive terminal failures.
+  threshold  Int         @default(1)
+  // Terminal statuses that trigger the alert.
+  onStatuses RunStatus[] @default([FAILED, TIMEOUT, DEAD_LETTER])
+  enabled    Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  tenant  Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  channel NotificationChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([channelId])
+  @@index([jobId])
+}
+
+// ─────────────────────── Live notifications ───────────────────────
+
+// A per-user, in-app notification (bell feed). Written by the worker when an
+// event fires and the user's NotificationPref allows it. Tenant-scoped (RLS).
+// jobId/runId are soft references (no FK) so purging a job never blocks here.
+model Notification {
+  id        String    @id @default(cuid())
+  tenantId  String
+  userId    String
+  // Event key: job.failed | job.timeout | job.dead_letter | heartbeat.missed | test
+  type      String
+  // INFO | WARNING | CRITICAL
+  severity  String    @default("WARNING")
+  title     String
+  body      String?
+  jobId     String?
+  runId     String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([tenantId, userId, createdAt(sort: Desc)])
+  @@index([tenantId, userId, readAt])
+}
+
+// A user's notification policy inside one tenant: which events notify them,
+// whether to raise browser popups, and an optional quiet-hours window during
+// which nothing is created. Missing row = sensible defaults (all events on).
+model NotificationPref {
+  id         String   @id @default(cuid())
+  tenantId   String
+  userId     String
+  events     String[] @default(["job.failed", "job.timeout", "job.dead_letter", "heartbeat.missed"])
+  browser    Boolean  @default(true)
+  // Local HH:MM in quietTz; both null = no quiet hours.
+  quietStart String?
+  quietEnd   String?
+  quietTz    String?  @default("Europe/Athens")
+  updatedAt  DateTime @updatedAt
+
+  @@unique([tenantId, userId])
+  @@index([tenantId])
+}
+
+// A browser Web Push subscription for one user+device. Deliberately NOT
+// tenant-scoped: a push subscription belongs to a browser/device and spans every
+// workspace the user belongs to, so a single grant delivers failures from all of
+// them. No RLS — the API always scopes queries by the authenticated userId, and
+// the worker reads these in a bypass transaction. `endpoint` is globally unique
+// (the push service URL); p256dh/auth are the subscription's public keys used to
+// encrypt the payload (VAPID).
+model PushSubscription {
+  id         String   @id @default(cuid())
+  userId     String
+  endpoint   String   @unique
+  p256dh     String
+  auth       String
+  ua         String?
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// A per-workspace override for the TEXT of an outbound message, keyed by event
+// and channel. When a row exists (and is enabled) the worker renders it with the
+// event's variables ({{ job.name }}, {{ run.status }}, …); otherwise it falls
+// back to the built-in default copy. `subject` doubles as the title for in-app /
+// push and the subject line for email; `body` is the main text (a JSON string
+// template for the WEBHOOK channel). Tenant-scoped (RLS).
+model MessageTemplate {
+  id        String   @id @default(cuid())
+  tenantId  String
+  // job.failed | job.timeout | job.dead_letter | heartbeat.missed
+  event     String
+  // INAPP | EMAIL | SLACK | WEBHOOK
+  channel   String
+  subject   String?
+  body      String
+  enabled   Boolean  @default(true)
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, event, channel])
+  @@index([tenantId])
+}
+
+// ─────────────────────── Platform (global) config ───────────────────────
+//
+// A single-row table holding instance-wide branding the platform super-admin
+// can change at runtime (app name + icon shown in the console shell and on the
+// sign-in screen). It carries no tenantId and is therefore NOT subject to RLS:
+// branding is global, readable by everyone (including the unauthenticated login
+// page) and writable only by a verified super-admin via the API.
+model AppConfig {
+  // Fixed primary key: there is only ever one row ("app").
+  id        String   @id @default("app")
+  name      String   @default("CronApp")
+  icon      String   @default("◷")
+  // Optional custom logo, stored as a self-contained data: URL (image/*). When
+  // set, the console and sign-in screen render it instead of the glyph icon.
+  logo      String?
+  // Display size (px) of the brand mark in the console shell; the super-admin
+  // tunes this from Settings. Clamped by the API to a sensible range.
+  logoScale Int      @default(32)
+  // Optional browser-tab favicon as a self-contained image data: URL. When set,
+  // the console swaps the tab icon to this at runtime.
+  favicon   String?
+  // Which nav items appear in the mobile/tablet footer bar (list of hrefs, in
+  // order). Empty → a sensible default. Each item is still permission-gated per
+  // user, so a configured item only shows for users allowed to see it.
+  mobileNav String[] @default([])
+  updatedAt DateTime @updatedAt
+}
+
+// Instance-wide SMTP settings, managed by a super-admin from the console. Not
+// tenant-scoped (no RLS). The password is encrypted at rest with the same
+// AES-256-GCM envelope as tenant secrets and is never returned by the API. When
+// no row is enabled, the worker falls back to SMTP_* env vars (and then to a
+// dry-run transport), so email still works end-to-end without this configured.
+model SmtpConfig {
+  id                 String   @id @default("smtp")
+  enabled            Boolean  @default(false)
+  // Delivery provider: "smtp" (host/port), "microsoft365" (Graph, app-only
+  // OAuth) or "gmail" (Gmail API, service-account OAuth).
+  provider           String   @default("smtp")
+  host               String?
+  port               Int      @default(587)
+  secure             Boolean  @default(false)
+  username           String?
+  fromAddr           String?
+  // Encrypted password (AES-256-GCM); null when no password / auth not used.
+  passwordCiphertext Bytes?
+  passwordIv         Bytes?
+  passwordAuthTag    Bytes?
+
+  // ── Microsoft 365 connector (Graph, client-credentials) ──
+  msTenantId              String?
+  msClientId              String?
+  // Encrypted Azure app client secret.
+  msClientSecretCiphertext Bytes?
+  msClientSecretIv         Bytes?
+  msClientSecretAuthTag    Bytes?
+
+  // ── Gmail connector (service account, domain-wide delegation) ──
+  gmailClientEmail      String?
+  // Encrypted service-account private key (PEM).
+  gmailKeyCiphertext    Bytes?
+  gmailKeyIv            Bytes?
+  gmailKeyAuthTag       Bytes?
+
+  updatedAt          DateTime @updatedAt
+}

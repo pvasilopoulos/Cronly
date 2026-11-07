@@ -1,0 +1,29 @@
+node_modules/
+dist/
+build/
+.next/
+out/
+
+# env
+.env
+.env.local
+*.env
+!.env.example
+
+# prisma
+packages/database/src/generated/
+
+# logs
+*.log
+npm-debug.log*
+logs/
+
+# storage (local response payloads in dev)
+storage/
+
+# os / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

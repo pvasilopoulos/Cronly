@@ -1,0 +1,705 @@
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>CronApp Console</title>
+<style>
+  /* Layout: fixed left rail (tenant + nav), main column with sticky topbar and swappable views; detail opens in a right slide-over */
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+  :root {
+    --bg: #f4f5f8;
+    --surface: #ffffff;
+    --surface-2: #f7f8fb;
+    --line: #e4e7ef;
+    --line-strong: #d3d8e6;
+    --fg: #1a1d29;
+    --fg-muted: #5b6377;
+    --fg-faint: #8b93a7;
+    --accent: #4f46e5;
+    --accent-soft: #eceafe;
+    --accent-fg: #4338ca;
+    --ok: #0f9d6b;
+    --ok-soft: #dcf3ea;
+    --run: #2563eb;
+    --run-soft: #dde9fe;
+    --warn: #c2820a;
+    --warn-soft: #fbf0d4;
+    --err: #dc3545;
+    --err-soft: #fbe0e3;
+    --font-sans: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+    --radius: 10px;
+    --shadow: 0 1px 2px rgba(20,25,45,.06), 0 8px 24px rgba(20,25,45,.07);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d0f17;
+      --surface: #161926;
+      --surface-2: #1c2030;
+      --line: #272c3d;
+      --line-strong: #353c52;
+      --fg: #e9ecf5;
+      --fg-muted: #9aa3bc;
+      --fg-faint: #6a7390;
+      --accent: #7c75f0;
+      --accent-soft: #241f4d;
+      --accent-fg: #b4aefc;
+      --ok: #34d399;
+      --ok-soft: #113328;
+      --run: #60a5fa;
+      --run-soft: #10264a;
+      --warn: #e0b64a;
+      --warn-soft: #352a0f;
+      --err: #f87171;
+      --err-soft: #3a1418;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.4);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d0f17;
+    --surface: #161926;
+    --surface-2: #1c2030;
+    --line: #272c3d;
+    --line-strong: #353c52;
+    --fg: #e9ecf5;
+    --fg-muted: #9aa3bc;
+    --fg-faint: #6a7390;
+    --accent: #7c75f0;
+    --accent-soft: #241f4d;
+    --accent-fg: #b4aefc;
+    --ok: #34d399;
+    --ok-soft: #113328;
+    --run: #60a5fa;
+    --run-soft: #10264a;
+    --warn: #e0b64a;
+    --warn-soft: #352a0f;
+    --err: #f87171;
+    --err-soft: #3a1418;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.4);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--fg); font-family: var(--font-sans); margin: 0; }
+  .app { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+
+  /* ---- Sidebar ---- */
+  .rail {
+    background: var(--surface); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 18px 14px; position: sticky; top: 0; height: 100vh;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 2px 8px 14px; }
+  .brand .logo {
+    width: 30px; height: 30px; border-radius: 8px; flex: none;
+    background: linear-gradient(135deg, var(--accent), #8b5cf6);
+    display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px;
+  }
+  .brand b { font-size: 16px; letter-spacing: -.01em; }
+  .brand small { display: block; color: var(--fg-faint); font-size: 11px; font-weight: 500; }
+
+  .tenant {
+    position: relative; margin: 0 2px 12px;
+  }
+  .tenant-btn {
+    width: 100%; text-align: left; cursor: pointer; font-family: inherit;
+    background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 9px 11px; display: flex; align-items: center; gap: 9px; color: var(--fg);
+  }
+  .tenant-btn:hover { border-color: var(--line-strong); }
+  .tenant-ava { width: 26px; height: 26px; border-radius: 7px; flex: none; display: grid; place-items: center; font-weight: 700; font-size: 12px; color: #fff; }
+  .tenant-meta { min-width: 0; flex: 1; }
+  .tenant-meta b { font-size: 13px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tenant-meta span { font-size: 11px; color: var(--fg-faint); }
+  .tenant-btn .chev { color: var(--fg-faint); font-size: 12px; }
+
+  .tenant-menu {
+    position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 40;
+    background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 6px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .tenant-menu button {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+    background: none; border: none; cursor: pointer; font-family: inherit; color: var(--fg);
+    padding: 7px 8px; border-radius: 7px; font-size: 13px;
+  }
+  .tenant-menu button:hover { background: var(--surface-2); }
+
+  .nav-label { font-size: 10.5px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-faint); padding: 10px 10px 4px; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px;
+    cursor: pointer; color: var(--fg-muted); font-size: 13.5px; font-weight: 500; border: none; background: none; width: 100%; text-align: left; font-family: inherit;
+  }
+  .nav-item:hover { background: var(--surface-2); color: var(--fg); }
+  .nav-item.active { background: var(--accent-soft); color: var(--accent-fg); font-weight: 600; }
+  .nav-item .ic { width: 17px; text-align: center; flex: none; }
+  .nav-item .count { margin-left: auto; font-size: 11px; font-family: var(--font-mono); color: var(--fg-faint); }
+  .nav-item.active .count { color: var(--accent-fg); }
+
+  .rail-foot { margin-top: auto; padding: 8px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 9px; }
+  .rail-foot .ava { width: 28px; height: 28px; border-radius: 50%; background: var(--surface-2); border: 1px solid var(--line); display: grid; place-items: center; font-size: 12px; font-weight: 600; }
+  .rail-foot small { display: block; color: var(--fg-faint); font-size: 11px; }
+  .rail-foot b { font-size: 12.5px; }
+
+  /* ---- Main ---- */
+  .main { min-width: 0; display: flex; flex-direction: column; }
+  .topbar {
+    position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--bg) 85%, transparent);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 14px; padding: 14px 24px;
+  }
+  .topbar h1 { font-size: 18px; margin: 0; letter-spacing: -.015em; }
+  .topbar .sub { color: var(--fg-faint); font-size: 12.5px; }
+  .spacer { flex: 1; }
+  .search {
+    display: flex; align-items: center; gap: 7px; background: var(--surface); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 11px; color: var(--fg-faint); font-size: 12.5px; min-width: 190px;
+  }
+  .search input { border: none; background: none; outline: none; color: var(--fg); font-family: inherit; font-size: 12.5px; width: 100%; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer; font-family: inherit;
+    border-radius: 8px; padding: 8px 13px; font-size: 13px; font-weight: 600; border: 1px solid var(--line-strong); background: var(--surface); color: var(--fg);
+  }
+  .btn:hover { border-color: var(--fg-faint); }
+  .btn.pri { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.pri:hover { filter: brightness(1.07); }
+  .icon-btn { width: 36px; height: 36px; padding: 0; justify-content: center; }
+
+  .view { padding: 22px 24px 40px; }
+
+  /* stat row */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
+  .stat { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 15px 16px; }
+  .stat .k { font-size: 11.5px; color: var(--fg-muted); font-weight: 500; display: flex; align-items: center; gap: 6px; }
+  .stat .v { font-size: 27px; font-weight: 700; letter-spacing: -.02em; margin-top: 7px; font-variant-numeric: tabular-nums; }
+  .stat .d { font-size: 11.5px; margin-top: 3px; font-family: var(--font-mono); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+  /* table */
+  .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .panel-head { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--line); }
+  .panel-head h2 { font-size: 14px; margin: 0; }
+  .panel-head .tag { font-size: 11px; font-family: var(--font-mono); color: var(--fg-faint); background: var(--surface-2); padding: 2px 7px; border-radius: 20px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  thead th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--fg-faint); padding: 10px 16px; border-bottom: 1px solid var(--line); }
+  tbody td { padding: 12px 16px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: middle; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--surface-2); }
+  .jobname { display: flex; flex-direction: column; gap: 2px; }
+  .jobname b { font-weight: 600; font-size: 13.5px; }
+  .jobname code { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-muted); }
+  .cron { font-family: var(--font-mono); font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); padding: 2px 7px; border-radius: 6px; display: inline-block; }
+  .num { font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: 12.5px; }
+
+  .pill { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 20px; white-space: nowrap; }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.run { background: var(--run-soft); color: var(--run); }
+  .pill.warn { background: var(--warn-soft); color: var(--warn); }
+  .pill.err { background: var(--err-soft); color: var(--err); }
+  .pill.off { background: var(--surface-2); color: var(--fg-faint); }
+
+  .toggle { width: 34px; height: 20px; border-radius: 20px; background: var(--line-strong); position: relative; cursor: pointer; flex: none; transition: background .15s; border: none; }
+  .toggle.on { background: var(--ok); }
+  .toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+  .toggle.on::after { left: 16px; }
+
+  /* roles */
+  .grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .role-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+  .role-card h3 { margin: 0 0 2px; font-size: 14.5px; display: flex; align-items: center; gap: 8px; }
+  .role-card .who { color: var(--fg-faint); font-size: 12px; margin-bottom: 12px; }
+  .perm { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 4px 0; color: var(--fg-muted); }
+  .perm .mk { width: 15px; text-align: center; font-weight: 700; }
+  .perm.yes .mk { color: var(--ok); }
+  .perm.no .mk { color: var(--fg-faint); }
+  .perm.no { color: var(--fg-faint); text-decoration: none; opacity: .6; }
+
+  /* slide-over */
+  .scrim { position: fixed; inset: 0; background: rgba(10,12,20,.45); z-index: 50; opacity: 0; pointer-events: none; transition: opacity .2s; }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .drawer {
+    position: fixed; top: 0; right: 0; height: 100vh; width: min(560px, 94vw); z-index: 60;
+    background: var(--surface); border-left: 1px solid var(--line-strong); box-shadow: var(--shadow);
+    transform: translateX(100%); transition: transform .22s cubic-bezier(.4,0,.2,1);
+    display: flex; flex-direction: column;
+  }
+  .drawer.open { transform: translateX(0); }
+  .drawer-head { padding: 18px 20px; border-bottom: 1px solid var(--line); }
+  .drawer-head .close { float: right; background: none; border: none; color: var(--fg-faint); font-size: 20px; cursor: pointer; line-height: 1; }
+  .drawer-head h2 { margin: 0 0 3px; font-size: 17px; }
+  .drawer-head code { font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted); }
+  .drawer-body { overflow-y: auto; padding: 18px 20px; display: flex; flex-direction: column; gap: 18px; }
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .meta-grid .m { background: var(--surface-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+  .meta-grid .m .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-faint); }
+  .meta-grid .m .v { font-size: 14px; font-weight: 600; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+  .sect-title { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--fg-faint); }
+  .run-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; background: var(--surface-2); }
+  .run-row:hover { border-color: var(--line-strong); }
+  .run-row .when { font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted); }
+  .run-row .size { margin-left: auto; font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-faint); }
+
+  /* response viewer */
+  .resp { border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .resp-bar { display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: var(--surface-2); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .resp-bar .ct { font-family: var(--font-mono); font-size: 11.5px; background: var(--accent-soft); color: var(--accent-fg); padding: 2px 8px; border-radius: 6px; font-weight: 600; }
+  .resp-bar .sz { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg-muted); }
+  .resp-bar .src { margin-left: auto; font-size: 11px; color: var(--fg-faint); display: flex; align-items: center; gap: 5px; }
+  .resp-body { max-height: 300px; overflow: auto; background: var(--surface); }
+  pre.code { margin: 0; padding: 14px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; white-space: pre; color: var(--fg); }
+  .tok-key { color: var(--accent-fg); }
+  .tok-str { color: var(--ok); }
+  .tok-num { color: var(--run); }
+  .tok-bool { color: var(--warn); }
+  .logline { display: flex; gap: 12px; padding: 1px 14px; font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7; }
+  .logline:hover { background: var(--surface-2); }
+  .logline .ln { color: var(--fg-faint); user-select: none; min-width: 34px; text-align: right; }
+  .logline .lv { font-weight: 600; min-width: 42px; }
+  .logline .lv.INFO { color: var(--run); }
+  .logline .lv.WARN { color: var(--warn); }
+  .logline .lv.ERR { color: var(--err); }
+  .resp-foot { padding: 8px 12px; border-top: 1px solid var(--line); background: var(--surface-2); font-size: 11px; color: var(--fg-faint); display: flex; align-items: center; gap: 8px; }
+
+  .note { font-size: 12px; color: var(--fg-muted); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 8px; padding: 10px 12px; display: flex; gap: 9px; }
+  .note b { color: var(--accent-fg); }
+
+  .demo-flag { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 30; background: var(--fg); color: var(--bg); font-size: 11px; font-weight: 600; padding: 6px 13px; border-radius: 20px; opacity: .88; letter-spacing: .02em; }
+
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; }
+    .rail { position: static; height: auto; flex-direction: column; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .hide-sm { display: none; }
+  }
+  @media (max-width: 520px) {
+    .stats { grid-template-columns: 1fr 1fr; }
+    .view { padding: 16px; }
+    .topbar { padding: 12px 16px; }
+  }
+</style>
+
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="rail">
+    <div class="brand">
+      <div class="logo">◷</div>
+      <div><b>CronApp</b><small>Console</small></div>
+    </div>
+
+    <div class="tenant">
+      <button class="tenant-btn" id="tenantBtn" aria-haspopup="true">
+        <span class="tenant-ava" id="tAva"></span>
+        <span class="tenant-meta"><b id="tName"></b><span id="tPlan"></span></span>
+        <span class="chev">▾</span>
+      </button>
+      <div class="tenant-menu" id="tenantMenu" hidden></div>
+    </div>
+
+    <div class="nav-label">Workspace</div>
+    <button class="nav-item active" data-view="jobs"><span class="ic">◷</span> Cron Jobs <span class="count" id="cJobs"></span></button>
+    <button class="nav-item" data-view="runs"><span class="ic">≡</span> Executions <span class="count" id="cRuns"></span></button>
+    <button class="nav-item" data-view="roles"><span class="ic">◆</span> Roles <span class="count" id="cRoles"></span></button>
+    <button class="nav-item" data-view="users"><span class="ic">◉</span> Users <span class="count" id="cUsers"></span></button>
+
+    <div class="nav-label">Account</div>
+    <button class="nav-item" data-view="settings"><span class="ic">⚙</span> Settings</button>
+
+    <div class="rail-foot">
+      <span class="ava">PV</span>
+      <div><b>P. Vasilopoulos</b><small>Owner</small></div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <div class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="viewTitle">Cron Jobs</h1>
+        <div class="sub" id="viewSub"></div>
+      </div>
+      <div class="spacer"></div>
+      <div class="search hide-sm">🔍<input placeholder="Search jobs, runs…"></div>
+      <button class="btn icon-btn" id="themeBtn" title="Theme">◐</button>
+      <button class="btn pri">＋ New Job</button>
+    </header>
+    <main class="view" id="view"></main>
+  </div>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <button class="close" id="drawerClose">×</button>
+    <h2 id="dTitle"></h2>
+    <code id="dSub"></code>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+</aside>
+
+<div class="demo-flag">◆ Interactive demo — mock data</div>
+
+<script>
+/* ---------------- mock data ---------------- */
+const TENANTS = [
+  { id: 't1', name: 'Acme Retail', plan: 'Scale · 2.4k jobs', color: '#4f46e5' },
+  { id: 't2', name: 'Nordwind Logistics', plan: 'Pro · 840 jobs', color: '#0f9d6b' },
+  { id: 't3', name: 'Helios Media', plan: 'Starter · 120 jobs', color: '#c2820a' },
+];
+
+// responses of very different shapes & sizes — the point of the viewer
+const RESP_JSON = {
+  ok: true, synced: 1842, skipped: 7, durationMs: 2314,
+  warehouse: { region: "eu-central-1", shards: 8 },
+  items: [
+    { sku: "AC-1099", qty: 340, price: 12.5, inStock: true },
+    { sku: "AC-2201", qty: 0, price: 8.9, inStock: false },
+    { sku: "AC-3310", qty: 58, price: 45.0, inStock: true }
+  ]
+};
+const RESP_LOG = [
+  ["INFO","Connecting to source API (attempt 1/3)"],
+  ["INFO","Auth OK — token exp in 3540s"],
+  ["INFO","Fetched page 1/48 (500 rows)"],
+  ["INFO","Fetched page 2/48 (500 rows)"],
+  ["WARN","Row 1183 missing field `region`, defaulted"],
+  ["INFO","Fetched page 3/48 (500 rows)"],
+  ["INFO","Upserting batch into warehouse…"],
+  ["WARN","Rate limit near (82%), backing off 400ms"],
+  ["INFO","Fetched page 4/48 (500 rows)"],
+  ["ERR","Row 2041 rejected: invalid price `-3.00`"],
+  ["INFO","Committed 2,000 rows (transaction #88421)"],
+];
+
+function mkRuns(seed) {
+  const now = Date.now();
+  const defs = [
+    { st:'ok',  ms: 2314, ct:'application/json', size: 48213,  kind:'json' },
+    { st:'ok',  ms: 1890, ct:'application/json', size: 44102,  kind:'json' },
+    { st:'warn',ms: 3120, ct:'text/plain',       size: 1348221,kind:'log'  },
+    { st:'err', ms: 540,  ct:'text/plain',       size: 2904,   kind:'log'  },
+    { st:'ok',  ms: 2501, ct:'application/json', size: 51200,  kind:'json' },
+  ];
+  return defs.map((d,i)=>({ ...d, id:'r'+(seed*10+i), at: now - (i*7+seed)*61000 }));
+}
+
+const JOBS = {
+  t1: [
+    { id:'j1', name:'Inventory Sync', fn:'sync.inventory', cron:'*/2 * * * *', human:'every 2 min', tz:'Europe/Athens', on:true,  last:'ok',  avg:2.3, success:99.2, perMin:1 },
+    { id:'j2', name:'Order Export → ERP', fn:'export.orders', cron:'*/1 * * * *', human:'every minute', tz:'Europe/Athens', on:true, last:'run', avg:1.9, success:98.7, perMin:1 },
+    { id:'j3', name:'Price Feed Pull', fn:'pull.prices', cron:'*/5 * * * *', human:'every 5 min', tz:'UTC', on:true, last:'warn', avg:3.1, success:94.0, perMin:0.2 },
+    { id:'j4', name:'Nightly Reconcile', fn:'recon.ledger', cron:'0 3 * * *', human:'03:00 daily', tz:'Europe/Athens', on:true, last:'ok', avg:41.0, success:100, perMin:0 },
+    { id:'j5', name:'Webhook Retry Sweep', fn:'retry.webhooks', cron:'*/10 * * * *', human:'every 10 min', tz:'UTC', on:false, last:'off', avg:0.8, success:97.3, perMin:0 },
+  ],
+  t2: [
+    { id:'j6', name:'Fleet GPS Ingest', fn:'ingest.gps', cron:'*/1 * * * *', human:'every minute', tz:'Europe/Berlin', on:true, last:'ok', avg:4.2, success:99.8, perMin:1 },
+    { id:'j7', name:'Route Optimizer', fn:'opt.routes', cron:'*/15 * * * *', human:'every 15 min', tz:'Europe/Berlin', on:true, last:'run', avg:28.4, success:96.1, perMin:0.07 },
+    { id:'j8', name:'Customs Docs Fetch', fn:'fetch.customs', cron:'0 */2 * * *', human:'every 2 h', tz:'UTC', on:true, last:'err', avg:6.0, success:88.5, perMin:0 },
+  ],
+  t3: [
+    { id:'j9', name:'Social Scheduler', fn:'post.social', cron:'0 9,13,18 * * *', human:'3×/day', tz:'Europe/Athens', on:true, last:'ok', avg:1.1, success:100, perMin:0 },
+    { id:'j10', name:'Asset Transcode', fn:'media.transcode', cron:'*/30 * * * *', human:'every 30 min', tz:'UTC', on:true, last:'ok', avg:52.0, success:92.0, perMin:0 },
+  ],
+};
+
+const ROLES = {
+  t1: [
+    { name:'Owner', icon:'◆', who:'1 member', perms:{'Jobs — view':1,'Jobs — edit':1,'Jobs — run now':1,'Responses — view':1,'Users & roles':1,'Billing':1} },
+    { name:'Operator', icon:'●', who:'4 members', perms:{'Jobs — view':1,'Jobs — edit':1,'Jobs — run now':1,'Responses — view':1,'Users & roles':0,'Billing':0} },
+    { name:'Analyst', icon:'▲', who:'7 members', perms:{'Jobs — view':1,'Jobs — edit':0,'Jobs — run now':0,'Responses — view':1,'Users & roles':0,'Billing':0} },
+    { name:'Read-only', icon:'○', who:'12 members', perms:{'Jobs — view':1,'Jobs — edit':0,'Jobs — run now':0,'Responses — view':0,'Users & roles':0,'Billing':0} },
+  ],
+  t2: [
+    { name:'Owner', icon:'◆', who:'2 members', perms:{'Jobs — view':1,'Jobs — edit':1,'Jobs — run now':1,'Responses — view':1,'Users & roles':1,'Billing':1} },
+    { name:'Dispatcher', icon:'●', who:'9 members', perms:{'Jobs — view':1,'Jobs — edit':1,'Jobs — run now':1,'Responses — view':1,'Users & roles':0,'Billing':0} },
+  ],
+  t3: [
+    { name:'Owner', icon:'◆', who:'1 member', perms:{'Jobs — view':1,'Jobs — edit':1,'Jobs — run now':1,'Responses — view':1,'Users & roles':1,'Billing':1} },
+    { name:'Editor', icon:'●', who:'3 members', perms:{'Jobs — view':1,'Jobs — edit':1,'Jobs — run now':1,'Responses — view':1,'Users & roles':0,'Billing':0} },
+  ],
+};
+
+const USERS = {
+  t1: [
+    { n:'Petros V.', e:'petros@acme.gr', r:'Owner', last:'now' },
+    { n:'Maria K.', e:'maria@acme.gr', r:'Operator', last:'4m ago' },
+    { n:'Giannis T.', e:'giannis@acme.gr', r:'Operator', last:'1h ago' },
+    { n:'Elena R.', e:'elena@acme.gr', r:'Analyst', last:'yesterday' },
+    { n:'Service Bot', e:'ci@acme.gr', r:'Read-only', last:'3d ago' },
+  ],
+  t2: [
+    { n:'Lars M.', e:'lars@nordwind.de', r:'Owner', last:'now' },
+    { n:'Ingrid S.', e:'ingrid@nordwind.de', r:'Dispatcher', last:'12m ago' },
+  ],
+  t3: [
+    { n:'Nikos A.', e:'nikos@helios.media', r:'Owner', last:'2h ago' },
+    { n:'Dafni P.', e:'dafni@helios.media', r:'Editor', last:'30m ago' },
+  ],
+};
+
+/* ---------------- state + helpers ---------------- */
+let cur = 't1', view = 'jobs';
+const $ = s => document.querySelector(s);
+const el = (t,c,h) => { const e=document.createElement(t); if(c)e.className=c; if(h!=null)e.innerHTML=h; return e; };
+const initials = n => n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
+function fmtSize(b){ if(b<1024)return b+' B'; if(b<1048576)return (b/1024).toFixed(1)+' KB'; return (b/1048576).toFixed(1)+' MB'; }
+function fmtAgo(ts){ const s=(Date.now()-ts)/1000; if(s<60)return Math.floor(s)+'s ago'; if(s<3600)return Math.floor(s/60)+'m ago'; if(s<86400)return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago'; }
+const PILL = { ok:['ok','● Success'], run:['run','● Running'], warn:['warn','● Warning'], err:['err','● Failed'], off:['off','○ Paused'] };
+function pill(k){ const [c,t]=PILL[k]; return `<span class="pill ${c}">${t}</span>`; }
+
+function highlightJSON(obj){
+  let s = JSON.stringify(obj, null, 2);
+  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  s = s.replace(/"([^"]+)":/g, '<span class="tok-key">"$1"</span>:');
+  s = s.replace(/: "([^"]*)"/g, ': <span class="tok-str">"$1"</span>');
+  s = s.replace(/: (true|false|null)/g, ': <span class="tok-bool">$1</span>');
+  s = s.replace(/: (-?\d+\.?\d*)/g, ': <span class="tok-num">$1</span>');
+  return s;
+}
+
+/* ---------------- tenant switcher ---------------- */
+function renderTenant(){
+  const t = TENANTS.find(x=>x.id===cur);
+  $('#tAva').style.background = t.color;
+  $('#tAva').textContent = initials(t.name);
+  $('#tName').textContent = t.name;
+  $('#tPlan').textContent = t.plan;
+}
+$('#tenantBtn').onclick = (e)=>{ e.stopPropagation(); const m=$('#tenantMenu'); m.hidden=!m.hidden; };
+document.addEventListener('click', ()=>{ $('#tenantMenu').hidden=true; });
+function buildTenantMenu(){
+  const m = $('#tenantMenu'); m.innerHTML='';
+  TENANTS.forEach(t=>{
+    const b = el('button', null, `<span class="tenant-ava" style="background:${t.color}">${initials(t.name)}</span><span><b style="font-size:13px">${t.name}</b><br><span style="font-size:11px;color:var(--fg-faint)">${t.plan}</span></span>`);
+    b.onclick = ()=>{ cur=t.id; renderTenant(); render(); };
+    m.appendChild(b);
+  });
+}
+
+/* ---------------- nav ---------------- */
+const TITLES = {
+  jobs:['Cron Jobs','Scheduled tasks for this workspace'],
+  runs:['Executions','Recent runs across all jobs'],
+  roles:['Roles & Permissions','Who can do what in this workspace'],
+  users:['Users','Members with access to this workspace'],
+  settings:['Settings','Workspace configuration'],
+};
+document.querySelectorAll('.nav-item').forEach(n=>{
+  n.onclick = ()=>{ view=n.dataset.view; document.querySelectorAll('.nav-item').forEach(x=>x.classList.toggle('active',x===n)); render(); };
+});
+
+function renderCounts(){
+  $('#cJobs').textContent = JOBS[cur].length;
+  $('#cRuns').textContent = JOBS[cur].length*5;
+  $('#cRoles').textContent = ROLES[cur].length;
+  $('#cUsers').textContent = USERS[cur].length;
+}
+
+/* ---------------- views ---------------- */
+function render(){
+  renderCounts();
+  $('#viewTitle').textContent = TITLES[view][0];
+  $('#viewSub').textContent = TITLES[view][1];
+  const v = $('#view'); v.innerHTML='';
+  if(view==='jobs') return renderJobs(v);
+  if(view==='runs') return renderRuns(v);
+  if(view==='roles') return renderRoles(v);
+  if(view==='users') return renderUsers(v);
+  if(view==='settings') return renderSettings(v);
+}
+
+function renderJobs(v){
+  const jobs = JOBS[cur];
+  const active = jobs.filter(j=>j.on).length;
+  const perMin = jobs.reduce((a,j)=>a+(j.on?j.perMin:0),0);
+  const avgSucc = (jobs.reduce((a,j)=>a+j.success,0)/jobs.length).toFixed(1);
+
+  const stats = el('div','stats');
+  stats.innerHTML = `
+    <div class="stat"><div class="k"><span class="dot" style="background:var(--ok)"></span>Active jobs</div><div class="v">${active}<span style="font-size:15px;color:var(--fg-faint)"> / ${jobs.length}</span></div><div class="d" style="color:var(--fg-faint)">${jobs.length-active} paused</div></div>
+    <div class="stat"><div class="k"><span class="dot" style="background:var(--run)"></span>Executions / min</div><div class="v">${perMin.toFixed(1)}</div><div class="d" style="color:var(--run)">~${Math.round(perMin*60)}/hr</div></div>
+    <div class="stat"><div class="k"><span class="dot" style="background:var(--accent)"></span>Success rate (24h)</div><div class="v">${avgSucc}%</div><div class="d" style="color:var(--ok)">▲ 0.4%</div></div>
+    <div class="stat"><div class="k"><span class="dot" style="background:var(--warn)"></span>Queue depth</div><div class="v">${cur==='t1'?17:cur==='t2'?3:0}</div><div class="d" style="color:var(--fg-faint)">waiting now</div></div>`;
+  v.appendChild(stats);
+
+  const panel = el('div','panel');
+  panel.innerHTML = `<div class="panel-head"><h2>All Jobs</h2><span class="tag">${jobs.length}</span><div class="spacer" style="flex:1"></div></div>`;
+  const tbl = el('table');
+  tbl.innerHTML = `<thead><tr><th>Job</th><th class="hide-sm">Schedule</th><th class="hide-sm">Timezone</th><th>Avg</th><th>Last run</th><th>On</th></tr></thead>`;
+  const tb = el('tbody');
+  jobs.forEach(j=>{
+    const tr = el('tr');
+    tr.innerHTML = `
+      <td><div class="jobname"><b>${j.name}</b><code>${j.fn}()</code></div></td>
+      <td class="hide-sm"><span class="cron">${j.cron}</span><div style="font-size:11px;color:var(--fg-faint);margin-top:4px">${j.human}</div></td>
+      <td class="hide-sm"><span class="num" style="font-size:12px">${j.tz}</span></td>
+      <td><span class="num">${j.avg}s</span></td>
+      <td>${pill(j.on?j.last:'off')}</td>
+      <td></td>`;
+    const tog = el('button','toggle'+(j.on?' on':''));
+    tog.onclick = (e)=>{ e.stopPropagation(); j.on=!j.on; render(); };
+    tr.lastElementChild.appendChild(tog);
+    tr.onclick = ()=>openJob(j);
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb); panel.appendChild(tbl); v.appendChild(panel);
+}
+
+function renderRuns(v){
+  const jobs = JOBS[cur];
+  const rows = [];
+  jobs.forEach((j,ji)=> mkRuns(ji+1).forEach(r=> rows.push({...r, job:j})));
+  rows.sort((a,b)=>b.at-a.at);
+  const panel = el('div','panel');
+  panel.innerHTML = `<div class="panel-head"><h2>Recent Executions</h2><span class="tag">last 24h</span></div>`;
+  const tbl = el('table');
+  tbl.innerHTML = `<thead><tr><th>Job</th><th class="hide-sm">Started</th><th>Duration</th><th>Response</th><th>Status</th></tr></thead>`;
+  const tb = el('tbody');
+  rows.slice(0,14).forEach(r=>{
+    const tr = el('tr');
+    tr.innerHTML = `
+      <td><div class="jobname"><b>${r.job.name}</b><code>#${r.id}</code></div></td>
+      <td class="hide-sm"><span class="num" style="color:var(--fg-muted)">${fmtAgo(r.at)}</span></td>
+      <td><span class="num">${(r.ms/1000).toFixed(2)}s</span></td>
+      <td><span class="num" style="color:var(--fg-muted)">${fmtSize(r.size)}</span> <span style="font-size:10.5px;color:var(--fg-faint)">· ${r.ct.split('/')[1]}</span></td>
+      <td>${pill(r.st)}</td>`;
+    tr.onclick = ()=>openRun(r, r.job);
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb); panel.appendChild(tbl); v.appendChild(panel);
+}
+
+function renderRoles(v){
+  const note = el('div','note', `<span>🔒</span><div><b>Multi-tenant isolation.</b> Permissions apply only within <b>${TENANTS.find(t=>t.id===cur).name}</b>. Enforced at the database row level (RLS) — a bug in a query can never leak another client's data.</div>`);
+  v.appendChild(note);
+  const grid = el('div','grid-cards'); grid.style.marginTop='16px';
+  ROLES[cur].forEach(role=>{
+    const c = el('div','role-card');
+    let h = `<h3>${role.icon} ${role.name}</h3><div class="who">${role.who}</div>`;
+    for(const [p,ok] of Object.entries(role.perms)){
+      h += `<div class="perm ${ok?'yes':'no'}"><span class="mk">${ok?'✓':'·'}</span>${p}</div>`;
+    }
+    c.innerHTML = h; grid.appendChild(c);
+  });
+  v.appendChild(grid);
+}
+
+function renderUsers(v){
+  const panel = el('div','panel');
+  panel.innerHTML = `<div class="panel-head"><h2>Members</h2><span class="tag">${USERS[cur].length}</span></div>`;
+  const tbl = el('table');
+  tbl.innerHTML = `<thead><tr><th>Member</th><th class="hide-sm">Email</th><th>Role</th><th>Last active</th></tr></thead>`;
+  const tb = el('tbody');
+  USERS[cur].forEach(u=>{
+    const tr = el('tr'); tr.style.cursor='default';
+    tr.innerHTML = `
+      <td><div style="display:flex;align-items:center;gap:10px"><span class="ava" style="width:30px;height:30px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line);display:grid;place-items:center;font-size:11px;font-weight:600">${initials(u.n)}</span><b style="font-size:13.5px">${u.n}</b></div></td>
+      <td class="hide-sm"><span class="num" style="color:var(--fg-muted);font-size:12px">${u.e}</span></td>
+      <td><span class="pill off" style="background:var(--accent-soft);color:var(--accent-fg)">${u.r}</span></td>
+      <td><span class="num" style="color:var(--fg-faint);font-size:12px">${u.last}</span></td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb); panel.appendChild(tbl); v.appendChild(panel);
+}
+
+function renderSettings(v){
+  const panel = el('div','panel'); panel.style.padding='20px';
+  panel.innerHTML = `<div style="display:flex;flex-direction:column;gap:16px;max-width:520px">
+    <div><div class="sect-title">Response retention</div><p style="margin:6px 0 0;color:var(--fg-muted);font-size:13px">Keep execution responses for <b style="color:var(--fg)">30 days</b>, then move to cold storage. Large payloads live in object storage; only metadata + a 2 KB preview stay in Postgres.</p></div>
+    <div><div class="sect-title">Concurrency</div><p style="margin:6px 0 0;color:var(--fg-muted);font-size:13px">Max <b style="color:var(--fg)">24</b> parallel workers · per-tenant rate limit <b style="color:var(--fg)">120 jobs/min</b>.</p></div>
+    <div><div class="sect-title">Timezone</div><p style="margin:6px 0 0;color:var(--fg-muted);font-size:13px">Workspace default <b style="color:var(--fg)">Europe/Athens</b> — each job can override.</p></div>
+  </div>`;
+  v.appendChild(panel);
+}
+
+/* ---------------- drawer ---------------- */
+function openDrawer(){ $('#scrim').classList.add('open'); $('#drawer').classList.add('open'); }
+function closeDrawer(){ $('#scrim').classList.remove('open'); $('#drawer').classList.remove('open'); }
+$('#scrim').onclick = closeDrawer; $('#drawerClose').onclick = closeDrawer;
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeDrawer(); });
+
+function openJob(j){
+  $('#dTitle').textContent = j.name;
+  $('#dSub').textContent = `${j.fn}()  ·  ${j.cron}`;
+  const b = $('#drawerBody'); b.innerHTML='';
+  const mg = el('div','meta-grid');
+  mg.innerHTML = `
+    <div class="m"><div class="k">Schedule</div><div class="v">${j.human}</div></div>
+    <div class="m"><div class="k">Timezone</div><div class="v" style="font-size:13px">${j.tz}</div></div>
+    <div class="m"><div class="k">Avg duration</div><div class="v">${j.avg}s</div></div>
+    <div class="m"><div class="k">Success (24h)</div><div class="v" style="color:var(--ok)">${j.success}%</div></div>`;
+  b.appendChild(mg);
+  const actions = el('div'); actions.style.display='flex'; actions.style.gap='8px';
+  actions.innerHTML = `<button class="btn pri" style="flex:1">▶ Run now</button><button class="btn" style="flex:1">Edit schedule</button>`;
+  b.appendChild(actions);
+  b.appendChild(el('div','sect-title',null)).textContent='Recent runs';
+  const list = el('div'); list.style.display='flex'; list.style.flexDirection='column'; list.style.gap='8px';
+  mkRuns(1).forEach(r=>{
+    const row = el('div','run-row');
+    row.innerHTML = `${pill(r.st)}<span class="when">${fmtAgo(r.at)}</span><span class="size">${fmtSize(r.size)} · ${(r.ms/1000).toFixed(2)}s</span>`;
+    row.onclick = ()=>openRun(r, j);
+    list.appendChild(row);
+  });
+  b.appendChild(list);
+  openDrawer();
+}
+
+function openRun(r, j){
+  $('#dTitle').textContent = `${j.name} — run #${r.id}`;
+  $('#dSub').textContent = `${new Date(r.at).toLocaleString('en-GB')}  ·  ${(r.ms/1000).toFixed(2)}s`;
+  const b = $('#drawerBody'); b.innerHTML='';
+  const mg = el('div','meta-grid');
+  mg.innerHTML = `
+    <div class="m"><div class="k">Status</div><div class="v">${pill(r.st)}</div></div>
+    <div class="m"><div class="k">Duration</div><div class="v">${(r.ms/1000).toFixed(2)}s</div></div>
+    <div class="m"><div class="k">Response size</div><div class="v">${fmtSize(r.size)}</div></div>
+    <div class="m"><div class="k">Content-Type</div><div class="v" style="font-size:12px;font-family:var(--font-mono)">${r.ct}</div></div>`;
+  b.appendChild(mg);
+
+  const st = el('div','sect-title',null); st.textContent='Response'; b.appendChild(st);
+
+  // the response viewer — adapts to content-type & size
+  const resp = el('div','resp');
+  const big = r.size > 1048576;
+  resp.innerHTML = `<div class="resp-bar">
+      <span class="ct">${r.ct}</span>
+      <span class="sz">${fmtSize(r.size)}</span>
+      <span class="src">${big?'⬇ streamed from object storage':'▣ inline (Postgres)'}</span>
+    </div>`;
+  const body = el('div','resp-body');
+  if(r.kind==='json'){
+    body.appendChild(el('pre','code', highlightJSON(RESP_JSON)));
+  } else {
+    RESP_LOG.forEach((l,i)=>{
+      const line = el('div','logline');
+      line.innerHTML = `<span class="ln">${i+1}</span><span class="lv ${l[0]}">${l[0]}</span><span>${l[1].replace(/</g,'&lt;')}</span>`;
+      body.appendChild(line);
+    });
+  }
+  resp.appendChild(body);
+  const foot = el('div','resp-foot');
+  foot.innerHTML = big
+    ? `⬇ Showing first 11 lines of ${fmtSize(r.size)} · virtualized — scroll loads more via Range requests`
+    : `▣ Full response · stored inline, no object-storage round-trip`;
+  resp.appendChild(foot);
+  b.appendChild(resp);
+
+  if(r.st==='err'){
+    const n = el('div','note'); n.style.background='var(--err-soft)'; n.style.borderColor='var(--err)';
+    n.innerHTML = `<span>⚠</span><div><b style="color:var(--err)">Failed with retries.</b> Attempt 3/3 · next retry backoff exhausted. BullMQ moved job to the dead-letter queue.</div>`;
+    b.appendChild(n);
+  }
+  openDrawer();
+}
+
+/* ---------------- theme ---------------- */
+$('#themeBtn').onclick = ()=>{
+  const r = document.documentElement;
+  const isDark = r.getAttribute('data-theme')==='dark' || (!r.getAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches);
+  r.setAttribute('data-theme', isDark?'light':'dark');
+};
+
+/* ---------------- boot ---------------- */
+renderTenant(); buildTenantMenu(); render();
+</script>

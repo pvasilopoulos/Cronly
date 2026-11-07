@@ -1,0 +1,17 @@
+{
+  "name": "@cronapp/rbac",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@casl/ability": "6.7.2"
+  },
+  "devDependencies": {
+    "typescript": "5.7.3"
+  }
+}

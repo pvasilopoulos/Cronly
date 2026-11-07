@@ -1,0 +1,212 @@
+name: CI
+
+# Runs on every PR and on pushes to main. The pipeline blocks a merge when any
+# gate fails: lint, typecheck/build, unit tests, then integration tests against a
+# live Postgres + Redis. See ROADMAP.md #16 (Delivery & quality).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  # ── Fast feedback: install once, lint, typecheck/build, unit tests ──
+  build-and-unit:
+    name: Lint, build & unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Lint (web)
+        run: npm run lint
+
+      # `build` compiles every workspace (tsc / nest build / next build), which
+      # also serves as the typecheck gate — a type error fails the build.
+      - name: Typecheck & build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+  # ── Full-stack integration tests against real Postgres + Redis ──
+  integration:
+    name: API integration tests
+    runs-on: ubuntu-latest
+    needs: build-and-unit
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cronapp
+          POSTGRES_PASSWORD: cronapp
+          POSTGRES_DB: cronapp
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U cronapp"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://cronapp:cronapp@127.0.0.1:5432/cronapp?schema=public
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '6379'
+      REDIS_PASSWORD: ''
+      SECRETS_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      JWT_ACCESS_SECRET: ci-access-secret
+      JWT_REFRESH_SECRET: ci-refresh-secret
+      JWT_ACCESS_TTL: 900s
+      JWT_REFRESH_TTL: 30d
+      API_PORT: '3001'
+      CORS_ORIGIN: http://127.0.0.1:3000
+      STORAGE_DRIVER: local
+      STORAGE_LOCAL_PATH: ./.storage
+      STORAGE_INLINE_MAX_BYTES: '65536'
+      SCHEDULER_TICK_MS: '5000'
+      WORKER_CONCURRENCY: '4'
+      RESPONSE_RETENTION_DAYS: '30'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run db:generate
+
+      - name: Apply migrations
+        run: npm run db:migrate:deploy
+
+      - name: Apply row-level-security policies
+        run: npm run db:rls
+
+      - name: Seed demo data
+        run: npm run db:seed
+
+      - name: Build
+        run: npm run build
+
+      # Boot the stack in the background, wait for readiness, then run the live
+      # integration suite against it.
+      - name: Start API, worker & scheduler
+        run: |
+          node apps/api/dist/main.js &
+          node apps/worker/dist/main.js &
+          node apps/scheduler/dist/main.js &
+          echo "Waiting for API /ready…"
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:3001/ready >/dev/null; then
+              echo "API is ready"; break
+            fi
+            sleep 2
+          done
+
+      - name: Integration tests
+        run: npm run test:integration
+
+  # ── Browser end-to-end tests of the console (Playwright) ──
+  e2e:
+    name: Console E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: build-and-unit
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: cronapp
+          POSTGRES_PASSWORD: cronapp
+          POSTGRES_DB: cronapp
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U cronapp"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis:7
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql://cronapp:cronapp@127.0.0.1:5432/cronapp?schema=public
+      REDIS_HOST: 127.0.0.1
+      REDIS_PORT: '6379'
+      REDIS_PASSWORD: ''
+      SECRETS_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      JWT_ACCESS_SECRET: ci-access-secret
+      JWT_REFRESH_SECRET: ci-refresh-secret
+      JWT_ACCESS_TTL: 900s
+      JWT_REFRESH_TTL: 30d
+      API_PORT: '3001'
+      CORS_ORIGIN: http://127.0.0.1:3000
+      STORAGE_DRIVER: local
+      STORAGE_LOCAL_PATH: ./.storage
+      STORAGE_INLINE_MAX_BYTES: '65536'
+      SCHEDULER_TICK_MS: '5000'
+      WORKER_CONCURRENCY: '4'
+      RESPONSE_RETENTION_DAYS: '30'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Playwright (chromium)
+        run: npm i -D -w @cronapp/web @playwright/test@1.49.1 && npx -w @cronapp/web playwright install --with-deps chromium
+      - name: Generate Prisma client
+        run: npm run db:generate
+      - name: Apply migrations, RLS & seed
+        run: npm run db:migrate:deploy && npm run db:rls && npm run db:seed
+      - name: Build
+        run: npm run build
+      - name: Start stack (api, worker, scheduler, web)
+        run: |
+          node apps/api/dist/main.js &
+          node apps/worker/dist/main.js &
+          node apps/scheduler/dist/main.js &
+          npm run start -w @cronapp/web &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3001/ready >/dev/null && curl -sf http://127.0.0.1:3000/login >/dev/null && break
+            sleep 2
+          done
+      - name: Run Playwright E2E
+        run: npx -w @cronapp/web playwright test
+      - name: Upload report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report
+          retention-days: 7

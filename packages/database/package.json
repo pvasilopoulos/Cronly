@@ -1,0 +1,29 @@
+{
+  "name": "@cronapp/database",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "generate": "prisma generate",
+    "migrate": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "rls": "node ./scripts/apply-rls.js",
+    "seed": "ts-node prisma/seed.ts",
+    "studio": "prisma studio",
+    "build": "tsc -p tsconfig.json"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
+  },
+  "dependencies": {
+    "@prisma/client": "6.2.1"
+  },
+  "devDependencies": {
+    "prisma": "6.2.1",
+    "pg": "8.13.1",
+    "ts-node": "10.9.2",
+    "typescript": "5.7.3",
+    "@types/node": "22.10.5"
+  }
+}
