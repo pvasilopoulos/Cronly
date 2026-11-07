@@ -87,6 +87,10 @@ set -x
 [ -n "${DATABASE_URL:-}" ] || { echo "ERROR: DATABASE_URL is empty after loading .env"; exit 1; }
 echo "DATABASE_URL loaded (host: $(echo "$DATABASE_URL" | sed -E 's#.*@([^/?]+).*#\1#'))"
 
+# Ensure gen_random_uuid() exists (PG < 13 without pgcrypto). Runs as the app
+# role — no superuser needed. No-op when the function already exists.
+npx prisma db execute --file deploy/ensure-uuid.sql --schema packages/database/prisma/schema.prisma
+
 # Auto-heal: if a previous deploy left a migration in a failed state, mark it
 # rolled-back so `migrate deploy` can retry it. Runs via the Prisma engine (no
 # psql needed); the error on a brand-new DB (table not created yet) is ignored.
