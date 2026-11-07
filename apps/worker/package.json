@@ -14,7 +14,6 @@
     "@cronapp/handlers": "0.1.0",
     "@cronapp/rbac": "0.1.0",
     "@cronapp/storage": "0.1.0",
-    "bullmq": "5.34.5",
     "nodemailer": "6.9.16",
     "web-push": "3.6.7",
     "@cronapp/templating": "0.1.0"

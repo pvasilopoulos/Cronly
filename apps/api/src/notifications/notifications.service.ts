@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { jsonArray } from '@cronapp/database';
 import { PrismaService } from '../prisma/prisma.service';
 import { PrincipalService } from '../rbac/principal.service';
 import type { AuthUser } from '../auth/jwt.strategy';
@@ -75,7 +76,7 @@ export class NotificationsService {
       tx.notificationPref.findUnique({ where: { tenantId_userId: { tenantId: p.tenantId, userId: p.userId } } }),
     );
     return {
-      events: row?.events ?? DEFAULT_EVENTS,
+      events: row ? jsonArray(row.events) : DEFAULT_EVENTS,
       browser: row?.browser ?? true,
       quietStart: row?.quietStart ?? null,
       quietEnd: row?.quietEnd ?? null,

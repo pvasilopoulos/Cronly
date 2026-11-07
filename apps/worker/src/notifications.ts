@@ -1,4 +1,4 @@
-import { getPrisma } from '@cronapp/database';
+import { getPrisma, jsonArray } from '@cronapp/database';
 import { sendPush, type PushSub } from './push';
 
 // Per-user notification fan-out. When an event fires, every ACTIVE member of the
@@ -49,7 +49,6 @@ export async function notifyTenant(tenantId: string, event: string, payload: Not
     // Phase 1 (atomic): decide recipients by policy, write the in-app rows, and
     // collect those users' push subscriptions — all under RLS bypass.
     const subs = await prisma.$transaction(async (tx): Promise<PushSub[]> => {
-      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
       const [members, prefs] = await Promise.all([
         tx.membership.findMany({ where: { tenantId, status: 'ACTIVE' }, select: { userId: true } }),
         tx.notificationPref.findMany({ where: { tenantId } }),
@@ -58,7 +57,7 @@ export async function notifyTenant(tenantId: string, event: string, payload: Not
 
       const notified = members.filter((m) => {
         const pref = prefByUser.get(m.userId);
-        const events = pref?.events ?? DEFAULT_EVENTS;
+        const events = pref ? jsonArray(pref.events) : DEFAULT_EVENTS;
         if (!events.includes(event)) return false;
         if (pref && inQuietHours(pref.quietStart, pref.quietEnd, pref.quietTz)) return false;
         return true;

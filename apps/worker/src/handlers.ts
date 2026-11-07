@@ -104,36 +104,18 @@ const email: Handler = async (payload) => {
   };
 };
 
-// ─────────────────────────── db.query (read-only) ───────────────────────────
-// Runs a single SELECT fenced to the tenant by RLS AND restricted to the
-// read-only `cronapp_query` role (which may only SELECT Job & JobRun). The
-// transaction is read-only with a statement timeout, so even a crafted query
-// can neither write, escalate, nor run away.
-const dbQuery: Handler = async (payload, ctx) => {
-  const sql = String(payload?.sql ?? '').trim();
-  if (!sql) throw new Error('db.query: payload.sql is required');
-  const withoutTrailing = sql.replace(/;\s*$/, '');
-  if (/;/.test(withoutTrailing)) throw new Error('db.query: only a single statement is allowed');
-  if (!/^(select|with)\b/i.test(withoutTrailing)) {
-    throw new Error('db.query: only read-only SELECT queries are allowed');
-  }
-
-  const prisma = getPrisma();
-  const budget = Math.max(1000, Math.min(ctx.timeoutMs, 60000));
-  const rows = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.current_tenant', ${ctx.tenantId}, true)`;
-    await tx.$executeRawUnsafe('SET LOCAL ROLE cronapp_query');
-    await tx.$executeRawUnsafe('SET LOCAL transaction_read_only = on');
-    await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${budget}`);
-    return tx.$queryRawUnsafe(withoutTrailing);
-  });
-
-  const arr = rows as unknown[];
-  return {
-    contentType: 'application/json',
-    body: Buffer.from(JSON.stringify(arr, bigintSafe, 2)),
-    warning: Array.isArray(arr) && arr.length === 0 ? 'Query returned no rows' : undefined,
-  };
+// ─────────────────────────── db.query (disabled) ───────────────────────────
+// On PostgreSQL this ran a tenant's arbitrary read-only SELECT safely, fenced by
+// Row-Level Security plus a restricted `cronapp_query` role. MariaDB/MySQL has
+// no row-level security, so there is no safe way to let a tenant run arbitrary
+// SQL without risking a cross-tenant read (e.g. `SELECT * FROM JobRun`). The
+// handler is therefore disabled on this deployment and fails fast with a clear
+// message; a future safe implementation would need per-tenant views + a
+// dedicated read-only user, or server-side query rewriting.
+const dbQuery: Handler = async () => {
+  throw new Error(
+    'db.query is not available on this deployment: arbitrary SQL cannot be safely tenant-isolated on MariaDB (no row-level security).',
+  );
 };
 
 export const HANDLERS: Record<string, Handler> = {

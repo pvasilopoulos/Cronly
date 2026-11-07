@@ -13,9 +13,8 @@ export async function resolvePayloadSecrets(tenantId: string, payload: unknown):
   if (names.size === 0) return payload;
 
   const prisma = getPrisma();
-  const rows = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-    return tx.secret.findMany({ where: { tenantId, name: { in: [...names] } } });
+  const rows = await prisma.secret.findMany({
+    where: { tenantId, name: { in: [...names] } },
   });
 
   const values = new Map<string, string>();

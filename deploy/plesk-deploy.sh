@@ -87,19 +87,10 @@ set -x
 [ -n "${DATABASE_URL:-}" ] || { echo "ERROR: DATABASE_URL is empty after loading .env"; exit 1; }
 echo "DATABASE_URL loaded (host: $(echo "$DATABASE_URL" | sed -E 's#.*@([^/?]+).*#\1#'))"
 
-# Ensure gen_random_uuid() exists (PG < 13 without pgcrypto). Runs as the app
-# role — no superuser needed. No-op when the function already exists.
-npx prisma db execute --file deploy/ensure-uuid.sql --schema packages/database/prisma/schema.prisma
-
-# Ensure a "cronapp" role exists that the app role belongs to, so the migrations'
-# GRANT ... TO cronapp statements apply (works when the login role is named
-# differently). Needs CREATEROLE on the app role; no-op if it's already cronapp.
-npx prisma db execute --file deploy/ensure-role.sql --schema packages/database/prisma/schema.prisma
-
 # Auto-heal: if a previous deploy left a migration in a failed state, mark it
 # rolled-back so `migrate deploy` can retry it. Runs via the Prisma engine (no
 # psql needed); the error on a brand-new DB (table not created yet) is ignored.
-echo 'UPDATE "_prisma_migrations" SET rolled_back_at = now() WHERE finished_at IS NULL AND rolled_back_at IS NULL;' \
+echo 'UPDATE `_prisma_migrations` SET rolled_back_at = now() WHERE finished_at IS NULL AND rolled_back_at IS NULL;' \
   | npx prisma db execute --schema packages/database/prisma/schema.prisma --stdin 2>/dev/null || true
 
 npm run db:migrate:deploy

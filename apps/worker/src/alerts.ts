@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { getPrisma } from '@cronapp/database';
+import { getPrisma, jsonArray } from '@cronapp/database';
 import type { TemplateContext } from '@cronapp/templating';
 import { safeFetch } from './net-guard';
 import { sendMail } from './mailer';
@@ -23,7 +23,6 @@ export async function maybeAlert(
   const prisma = getPrisma();
 
   const ctx = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
     const job = await tx.job.findUnique({ where: { id: jobId } });
     const rules = await tx.alertRule.findMany({
       where: {
@@ -95,7 +94,7 @@ export async function maybeAlert(
   if (ctx.rules.length === 0) return;
 
   for (const rule of ctx.rules) {
-    if (!rule.onStatuses.includes(status as never)) continue;
+    if (!jsonArray(rule.onStatuses).includes(status as string)) continue;
     // Fire exactly when the streak crosses the threshold (avoids repeat spam).
     if (consecutive !== rule.threshold) continue;
     await deliver(rule.channel, {

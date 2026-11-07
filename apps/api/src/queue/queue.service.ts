@@ -1,6 +1,5 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
-import { Queue } from 'bullmq';
-import { env } from '../config/env';
+import { Injectable } from '@nestjs/common';
+import { getPrisma } from '@cronapp/database';
 
 export const EXECUTION_QUEUE = 'executions';
 
@@ -11,34 +10,36 @@ export interface ExecutionJobData {
   attempt: number;
 }
 
-/** Owns the BullMQ queue the API pushes ad-hoc ("run now") executions onto.
- *  The scheduler pushes scheduled executions onto the same queue; workers
- *  consume both. */
+/**
+ * The execution "queue" is just the set of JobRun rows in status QUEUED: the
+ * workers poll them directly (SELECT ... FOR UPDATE SKIP LOCKED), so there is no
+ * Redis/BullMQ broker. A caller enqueues simply by committing a QUEUED JobRun;
+ * `enqueue()` is kept as a no-op so the run-now / replay flows read naturally and
+ * stay broker-agnostic.
+ */
 @Injectable()
-export class QueueService implements OnModuleDestroy {
-  readonly executions = new Queue<ExecutionJobData>(EXECUTION_QUEUE, {
-    connection: { host: env.redis.host, port: env.redis.port, password: env.redis.password },
-    defaultJobOptions: {
-      removeOnComplete: 1000,
-      removeOnFail: 5000,
-      attempts: 1, // retries are managed explicitly via JobRun.attempt
-    },
-  });
-
-  /** Execution-queue depth by state, for metrics. */
-  counts(): Promise<Record<string, number>> {
-    return this.executions.getJobCounts('waiting', 'active', 'delayed', 'completed', 'failed', 'paused');
+export class QueueService {
+  /** Execution-queue depth by state, for metrics (QUEUED → waiting, RUNNING → active). */
+  async counts(): Promise<Record<string, number>> {
+    const rows = await getPrisma().jobRun.groupBy({
+      by: ['status'],
+      _count: { _all: true },
+      where: { status: { in: ['QUEUED', 'RUNNING'] } },
+    });
+    const out: Record<string, number> = { waiting: 0, active: 0 };
+    for (const r of rows) {
+      if (r.status === 'QUEUED') out.waiting = r._count._all;
+      else if (r.status === 'RUNNING') out.active = r._count._all;
+    }
+    return out;
   }
 
-  enqueue(data: ExecutionJobData, opts?: { perTenantKey?: string }) {
-    return this.executions.add('execute', data, {
-      // group by tenant so one noisy tenant can be rate-limited independently
-      jobId: `${data.runId}`,
-      ...(opts?.perTenantKey ? { group: { id: opts.perTenantKey } } : {}),
-    } as any);
-  }
-
-  async onModuleDestroy() {
-    await this.executions.close();
+  /**
+   * No-op: the QUEUED JobRun the caller already committed IS the queue entry, so
+   * there is nothing more to push. Kept for call-site compatibility.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async enqueue(_data: ExecutionJobData, _opts?: { perTenantKey?: string }): Promise<void> {
+    /* intentionally empty — DB-backed queue */
   }
 }

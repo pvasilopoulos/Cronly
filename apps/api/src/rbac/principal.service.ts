@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
+import { jsonArray } from '@cronapp/database';
 import {
   buildAbility,
   computeEffectivePermissions,
@@ -35,7 +36,7 @@ export class PrincipalService {
       if (!tenant) throw new ForbiddenException('Unknown tenant');
       const permissions = computeEffectivePermissions({
         rolePermissions: [],
-        tenantFeatures: tenant.features,
+        tenantFeatures: jsonArray(tenant.features),
         isSuperAdmin: true,
       });
       return {
@@ -76,7 +77,7 @@ export class PrincipalService {
     const permissions = computeEffectivePermissions({
       rolePermissions,
       overrides,
-      tenantFeatures: data.tenant.features,
+      tenantFeatures: jsonArray(data.tenant.features),
     });
 
     return {
@@ -104,7 +105,7 @@ export class PrincipalService {
 
     const permissions = computeEffectivePermissions({
       rolePermissions: scopes.map((s) => ({ permission: s, conditions: null })),
-      tenantFeatures: tenant.features,
+      tenantFeatures: jsonArray(tenant.features),
     });
 
     return {

@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { jsonArray } from '@cronapp/database';
 import {
   FEATURES,
   PLAN_FEATURES,
@@ -71,7 +72,7 @@ export class EntitlementsService {
       quota: { ...planDefaults, ...overrides },
       planDefaults,
       overrides,
-      features: t?.features ?? [],
+      features: jsonArray(t?.features),
       planFeatures: defaultFeaturesForPlan(plan),
       availableFeatures: FEATURES.map((key) => ({ key, label: FEATURE_LABELS[key] ?? key })),
       quotaLabels: QUOTA_LABELS,

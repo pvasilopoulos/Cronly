@@ -26,29 +26,29 @@ export async function monitorHeartbeatsOnce(): Promise<void> {
   const prisma = getPrisma();
 
   // 1) Atomically claim every job whose window has lapsed, flipping OK → MISSING.
+  //    MariaDB has no UPDATE ... RETURNING, so SELECT ... FOR UPDATE SKIP LOCKED
+  //    the due jobs, then stamp them in the same transaction. All time math uses
+  //    UTC_TIMESTAMP() because lastPingAt is stored UTC (Prisma writes Dates as
+  //    UTC); comparing against UTC keeps windows correct on any server timezone.
   const missed = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-    return tx.$queryRaw<MissedJob[]>(Prisma.sql`
-      UPDATE "Job" AS j
-      SET "heartbeatState" = 'MISSING', "heartbeatAlertedAt" = now()
-      WHERE j.id IN (
-        SELECT id FROM "Job"
-        WHERE "heartbeatEnabled" = true
-          AND "heartbeatState" = 'OK'
-          AND "lastPingAt" IS NOT NULL
-          -- lastPingAt is stored UTC-naive (Prisma writes Dates as UTC), so the
-          -- cutoff must be UTC-naive too. Using a bare now() would compare in the
-          -- session's local timezone and skew every window (see ROADMAP #4).
-          AND "lastPingAt" < (now() AT TIME ZONE 'UTC') - ((("heartbeatIntervalSec" + "heartbeatGraceSec")::text || ' seconds')::interval)
-        ORDER BY "lastPingAt" ASC
-        LIMIT 200
-        FOR UPDATE SKIP LOCKED
-      )
-      RETURNING j.id, j."tenantId", j.name,
-                j."heartbeatIntervalSec" AS "heartbeatIntervalSec",
-                j."heartbeatGraceSec" AS "heartbeatGraceSec",
-                j."lastPingAt" AS "lastPingAt";
+    const rows = await tx.$queryRaw<MissedJob[]>(Prisma.sql`
+      SELECT id, tenantId, name, heartbeatIntervalSec, heartbeatGraceSec, lastPingAt
+      FROM Job
+      WHERE heartbeatEnabled = true
+        AND heartbeatState = 'OK'
+        AND lastPingAt IS NOT NULL
+        AND lastPingAt < UTC_TIMESTAMP() - INTERVAL (heartbeatIntervalSec + heartbeatGraceSec) SECOND
+      ORDER BY lastPingAt ASC
+      LIMIT 200
+      FOR UPDATE SKIP LOCKED
     `);
+    if (rows.length > 0) {
+      await tx.$executeRaw(Prisma.sql`
+        UPDATE Job SET heartbeatState = 'MISSING', heartbeatAlertedAt = UTC_TIMESTAMP()
+        WHERE id IN (${Prisma.join(rows.map((r) => r.id))})
+      `);
+    }
+    return rows;
   });
 
   if (missed.length === 0) return;
@@ -71,7 +71,6 @@ async function alertHeartbeatMiss(job: MissedJob): Promise<void> {
   // missed heartbeat is its own event, not a run status. Also record an audit
   // entry (system actor) so the miss shows up in the audit log.
   const { channels, templates, fullJob, tenant } = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
     const rules = await tx.alertRule.findMany({
       where: {
         tenantId: job.tenantId,
