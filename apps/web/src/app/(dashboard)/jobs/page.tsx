@@ -52,13 +52,34 @@ export default function JobsPage() {
   const [handlerFilter, setHandlerFilter] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Jobs currently being queued, and jobs just queued (brief "✓" confirmation).
+  const [running, setRunning] = useState<Set<string>>(new Set());
+  const [queued, setQueued] = useState<Set<string>>(new Set());
 
   async function toggle(job: Job) {
     await api(`/jobs/${job.id}/toggle`, { method: 'POST' });
     globalMutate('/jobs');
   }
   async function runNow(job: Job) {
-    await api(`/jobs/${job.id}/run`, { method: 'POST' });
+    if (running.has(job.id)) return;
+    setRunning((s) => new Set(s).add(job.id));
+    try {
+      await api(`/jobs/${job.id}/run`, { method: 'POST' });
+      // Refresh this job's run history if its drawer is open.
+      globalMutate(`/jobs/${job.id}/runs`);
+      setQueued((s) => new Set(s).add(job.id));
+      setTimeout(() => setQueued((s) => {
+        const next = new Set(s);
+        next.delete(job.id);
+        return next;
+      }), 2500);
+    } finally {
+      setRunning((s) => {
+        const next = new Set(s);
+        next.delete(job.id);
+        return next;
+      });
+    }
   }
 
   const all = jobs ?? [];
@@ -224,9 +245,14 @@ export default function JobsPage() {
                       {can('jobs:run') && (
                         <button
                           onClick={() => runNow(j)}
-                          className="rounded-md border border-line px-2.5 py-1 text-xs font-medium hover:border-faint"
+                          disabled={running.has(j.id)}
+                          className={`rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-60 ${
+                            queued.has(j.id)
+                              ? 'border-ok/40 text-ok'
+                              : 'border-line hover:border-faint'
+                          }`}
                         >
-                          ▶ Run
+                          {running.has(j.id) ? '…' : queued.has(j.id) ? '✓ Queued' : '▶ Run'}
                         </button>
                       )}
                     </td>
@@ -281,9 +307,12 @@ export default function JobsPage() {
                     {can('jobs:run') && (
                       <button
                         onClick={() => runNow(j)}
-                        className="rounded-md border border-line px-2.5 py-1 text-xs font-medium"
+                        disabled={running.has(j.id)}
+                        className={`rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-60 ${
+                          queued.has(j.id) ? 'border-ok/40 text-ok' : 'border-line'
+                        }`}
                       >
-                        ▶
+                        {running.has(j.id) ? '…' : queued.has(j.id) ? '✓' : '▶'}
                       </button>
                     )}
                     {can('jobs:toggle') && <Toggle on={j.enabled} onClick={() => toggle(j)} />}
@@ -930,6 +959,11 @@ function JobDrawer({
               )}
             </div>
             <code className="font-mono text-xs text-muted">{cronExpr} · {timezone}</code>
+            <div className="mt-1">
+              <Link href={`/jobs/${job.id}`} className="text-xs font-medium text-accent-fg hover:underline">
+                ↗ Open dashboard
+              </Link>
+            </div>
           </div>
           <button onClick={onClose} className="rounded-md p-1 text-xl text-faint hover:bg-surface2">
             ×

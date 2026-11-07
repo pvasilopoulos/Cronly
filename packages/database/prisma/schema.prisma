@@ -68,6 +68,7 @@ enum ChannelType {
   EMAIL
   SLACK
   WEBHOOK
+  TELEGRAM
 }
 
 // Heartbeat (dead-man's-switch) state for a job: OK while pings/successes arrive
@@ -108,8 +109,29 @@ model Tenant {
   channels    NotificationChannel[]
   alertRules  AlertRule[]
   apiKeys     ApiKey[]
+  maintenanceWindows MaintenanceWindow[]
 
   @@index([status])
+}
+
+// A scheduled, tenant-wide pause. While "now" falls inside any window, the
+// scheduler suppresses every job in the tenant: it neither fires runs nor lets
+// them pile up (due jobs are fast-forwarded to their next slot past the window),
+// so maintenance never produces a burst of catch-up runs when it ends.
+model MaintenanceWindow {
+  id        String   @id @default(cuid())
+  tenantId  String
+  label     String?  // optional human note, e.g. "DB upgrade"
+  startsAt  DateTime
+  endsAt    DateTime
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  // The scheduler's "is any window active now?" check scans by time range.
+  @@index([tenantId, startsAt, endsAt])
 }
 
 model User {

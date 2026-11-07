@@ -16,6 +16,20 @@ function parseStatuses(raw?: string): RunStatusKey[] | undefined {
   return picked.length > 0 ? picked : undefined;
 }
 
+/** Render rows (uniform objects) to RFC-4180 CSV with a header row. */
+function toCsv(rows: Record<string, unknown>[]): string {
+  const headers = rows.length > 0 ? Object.keys(rows[0]) : [
+    'id', 'jobId', 'jobName', 'status', 'attempt', 'scheduledAt', 'startedAt', 'finishedAt', 'durationMs', 'responseSize', 'error',
+  ];
+  const esc = (v: unknown): string => {
+    const s = v === null || v === undefined ? '' : String(v);
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [headers.join(',')];
+  for (const row of rows) lines.push(headers.map((h) => esc(row[h])).join(','));
+  return lines.join('\r\n');
+}
+
 @Controller()
 export class RunsController {
   constructor(private readonly runs: RunsService) {}
@@ -47,6 +61,40 @@ export class RunsController {
   @RequirePermissions('runs:read')
   listForJob(@CurrentPrincipal() p: Principal, @Param('jobId') jobId: string) {
     return this.runs.listForJob(p, jobId);
+  }
+
+  @Get('jobs/:jobId/metrics')
+  @RequirePermissions('runs:read')
+  metrics(
+    @CurrentPrincipal() p: Principal,
+    @Param('jobId') jobId: string,
+    @Query('days') days?: string,
+  ) {
+    return this.runs.metricsForJob(p, jobId, days ? parseInt(days, 10) : 7);
+  }
+
+  // Export the run history as CSV or JSON. Honours the list filters; capped.
+  @Get('runs/export')
+  @RequirePermissions('runs:read')
+  async export(
+    @CurrentPrincipal() p: Principal,
+    @Res({ passthrough: true }) res: Response,
+    @Query('format') format?: string,
+    @Query('jobId') jobId?: string,
+    @Query('status') status?: string,
+    @Query('days') days?: string,
+  ): Promise<StreamableFile> {
+    const rows = await this.runs.exportRuns(p, {
+      jobId: jobId || undefined,
+      statuses: parseStatuses(status),
+      days: days ? parseInt(days, 10) : undefined,
+    });
+    const stamp = new Date().toISOString().slice(0, 10);
+    const json = (format ?? 'csv').toLowerCase() === 'json';
+    const body = json ? JSON.stringify(rows, null, 2) : toCsv(rows);
+    res.setHeader('Content-Type', json ? 'application/json' : 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="cronapp-runs-${stamp}.${json ? 'json' : 'csv'}"`);
+    return new StreamableFile(Readable.from(body));
   }
 
   @Get('runs/:id')

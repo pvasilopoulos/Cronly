@@ -10,7 +10,7 @@ import {
   MinLength,
 } from 'class-validator';
 
-export const CHANNEL_TYPES = ['EMAIL', 'SLACK', 'WEBHOOK'] as const;
+export const CHANNEL_TYPES = ['EMAIL', 'SLACK', 'WEBHOOK', 'TELEGRAM'] as const;
 export const ALERT_STATUSES = ['FAILED', 'TIMEOUT', 'DEAD_LETTER'] as const;
 
 export class CreateChannelDto {

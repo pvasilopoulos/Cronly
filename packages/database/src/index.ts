@@ -39,6 +39,7 @@ const TENANT_ID_MODELS = new Set<string>([
   'Notification',
   'NotificationPref',
   'MessageTemplate',
+  'MaintenanceWindow',
 ]);
 
 /** The column a given model is fenced on, or null if the model is not fenced. */

@@ -13,6 +13,8 @@ import { SmtpPanel } from '@/components/SmtpPanel';
 import { MobileNavPanel } from '@/components/MobileNavPanel';
 import { NotificationPrefPanel } from '@/components/NotificationPrefPanel';
 import { TemplatesPanel } from '@/components/TemplatesPanel';
+import { MaintenancePanel } from '@/components/MaintenancePanel';
+import { DigestPanel } from '@/components/DigestPanel';
 
 function UsageBar({ item }: { item: UsageItem }) {
   const unlimited = item.limit < 0;
@@ -98,6 +100,10 @@ export default function SettingsPage() {
           <SecurityPanel />
 
           <NotificationPrefPanel />
+
+          <DigestPanel />
+
+          <MaintenancePanel />
 
           <TemplatesPanel />
 

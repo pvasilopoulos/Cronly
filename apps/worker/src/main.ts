@@ -7,9 +7,13 @@ import { resolvePayloadSecrets } from './secrets';
 import { maybeAlert } from './alerts';
 import { notifyTenant } from './notifications';
 import { monitorHeartbeatsOnce } from './heartbeat';
+import { digestSweepOnce } from './digest';
 import { logJson } from './logger';
 
 const HEARTBEAT_MONITOR_MS = parseInt(process.env.HEARTBEAT_MONITOR_MS ?? '30000', 10);
+// How often to check whether any tenant's daily-digest hour has arrived. Every
+// 5 minutes is well within the 1-hour granularity of the digest setting.
+const DIGEST_SWEEP_MS = parseInt(process.env.DIGEST_SWEEP_MS ?? '300000', 10);
 // How many runs this worker process may execute concurrently.
 const CONCURRENCY = parseInt(process.env.WORKER_CONCURRENCY ?? '10', 10);
 // How often to poll the DB queue (QUEUED JobRuns whose scheduledAt has arrived).
@@ -298,6 +302,16 @@ async function monitorHeartbeats() {
   }
 }
 
+// Daily-digest sweep: fire each tenant's digest once, at its local hour. The
+// send is claimed atomically, so running this in every worker instance is safe.
+async function digestSweep() {
+  try {
+    await digestSweepOnce();
+  } catch (err: any) {
+    console.error('[digest] sweep error', err?.message ?? err);
+  }
+}
+
 console.log(`CronApp worker — polling every ${POLL_MS}ms, concurrency ${CONCURRENCY}`);
 const pollTimer = setInterval(poll, POLL_MS);
 void poll();
@@ -306,9 +320,14 @@ const heartbeatTimer = setInterval(monitorHeartbeats, HEARTBEAT_MONITOR_MS);
 setTimeout(monitorHeartbeats, 5000);
 console.log(`CronApp worker — heartbeat monitor every ${HEARTBEAT_MONITOR_MS}ms`);
 
+const digestTimer = setInterval(digestSweep, DIGEST_SWEEP_MS);
+setTimeout(digestSweep, 15000);
+console.log(`CronApp worker — digest sweep every ${DIGEST_SWEEP_MS}ms`);
+
 const shutdown = async () => {
   clearInterval(pollTimer);
   clearInterval(heartbeatTimer);
+  clearInterval(digestTimer);
   await getPrisma().$disconnect();
   process.exit(0);
 };

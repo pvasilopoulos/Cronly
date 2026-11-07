@@ -23,6 +23,42 @@ interface ClaimedJob {
   timezone: string;
 }
 
+interface SuppressedJob extends ClaimedJob {
+  windowEnd: Date;
+}
+
+// Advance (without running) every due job whose tenant is currently inside a
+// maintenance window. We fast-forward nextRunAt to the first occurrence AFTER
+// the window closes, so maintenance both skips runs and prevents a backlog
+// stampede when it ends.
+async function fastForwardSuppressed(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  const rows = await prisma.$queryRaw<SuppressedJob[]>(Prisma.sql`
+    SELECT j.id, j.tenantId, j.cronExpr, j.timezone, MAX(mw.endsAt) AS windowEnd
+    FROM Job j
+    JOIN MaintenanceWindow mw
+      ON mw.tenantId = j.tenantId
+     AND mw.startsAt <= UTC_TIMESTAMP()
+     AND mw.endsAt >= UTC_TIMESTAMP()
+    WHERE j.enabled = true
+      AND j.status = 'ACTIVE'
+      AND j.nextRunAt IS NOT NULL
+      AND j.nextRunAt <= UTC_TIMESTAMP()
+    GROUP BY j.id, j.tenantId, j.cronExpr, j.timezone
+    LIMIT ${BATCH}
+  `);
+  for (const job of rows) {
+    try {
+      const next = nextRun(job.cronExpr, job.timezone, new Date(job.windowEnd));
+      await prisma.job.update({ where: { id: job.id }, data: { nextRunAt: next } });
+    } catch (err) {
+      console.error(`[${INSTANCE}] fast-forward failed for ${job.id}`, err);
+    }
+  }
+  if (rows.length > 0) {
+    logJson({ level: 'info', msg: 'maintenance_skip', instance: INSTANCE, skipped: rows.length });
+  }
+}
+
 async function tick() {
   const prisma = getPrisma();
   try {
@@ -32,10 +68,16 @@ async function tick() {
     // the same transaction. All time math uses UTC_TIMESTAMP(): Prisma stores
     // DateTimes as UTC, so comparing against UTC keeps schedules correct
     // regardless of the server's OS timezone.
+    // Before claiming, fast-forward any due job whose tenant is inside an active
+    // maintenance window. Advancing nextRunAt to the next slot means the run is
+    // skipped (not queued) and, crucially, nothing piles up to fire in a burst
+    // the moment the window closes.
+    await fastForwardSuppressed(prisma);
+
     const claimed = await prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<ClaimedJob[]>(Prisma.sql`
         SELECT id, tenantId, cronExpr, timezone
-        FROM Job
+        FROM Job j
         WHERE enabled = true
           AND status = 'ACTIVE'
           AND nextRunAt IS NOT NULL
@@ -44,6 +86,13 @@ async function tick() {
           -- after it closes, even while the job stays ACTIVE.
           AND (startsAt IS NULL OR startsAt <= UTC_TIMESTAMP())
           AND (endsAt IS NULL OR endsAt >= UTC_TIMESTAMP())
+          -- Never claim while the tenant is in a maintenance window.
+          AND NOT EXISTS (
+            SELECT 1 FROM MaintenanceWindow mw
+            WHERE mw.tenantId = j.tenantId
+              AND mw.startsAt <= UTC_TIMESTAMP()
+              AND mw.endsAt >= UTC_TIMESTAMP()
+          )
           AND (lockedAt IS NULL OR lockedAt < UTC_TIMESTAMP() - INTERVAL 5 MINUTE)
         ORDER BY nextRunAt ASC
         LIMIT ${BATCH}

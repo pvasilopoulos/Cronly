@@ -7,7 +7,7 @@ import type { AlertRule, AlertStatus, ChannelType, Job, NotificationChannel } fr
 import { Spinner, EmptyState } from '@/components/ui';
 import { SearchableSelect } from '@/components/SearchableSelect';
 
-const CHANNEL_TYPES: ChannelType[] = ['EMAIL', 'SLACK', 'WEBHOOK'];
+const CHANNEL_TYPES: ChannelType[] = ['EMAIL', 'SLACK', 'WEBHOOK', 'TELEGRAM'];
 const ALERT_STATUSES: AlertStatus[] = ['FAILED', 'TIMEOUT', 'DEAD_LETTER'];
 
 const TYPE_META: Record<ChannelType, { icon: string; label: string; placeholder: string; hint: string }> = {
@@ -23,6 +23,12 @@ const TYPE_META: Record<ChannelType, { icon: string; label: string; placeholder:
     label: 'Webhook',
     placeholder: 'https://example.com/hooks/cron',
     hint: 'A JSON POST is sent here on each alert.',
+  },
+  TELEGRAM: {
+    icon: '✈',
+    label: 'Telegram',
+    placeholder: '-1001234567890',
+    hint: 'The chat ID to post to (use @userinfobot or getUpdates to find it).',
   },
 };
 
@@ -249,7 +255,8 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
           type,
           name,
           target,
-          ...(type === 'WEBHOOK' && signingSecret ? { signingSecret } : {}),
+          // WEBHOOK: optional HMAC secret. TELEGRAM: the bot token (required).
+          ...((type === 'WEBHOOK' || type === 'TELEGRAM') && signingSecret ? { signingSecret } : {}),
         },
       });
       globalMutate('/alerts/channels');
@@ -273,7 +280,7 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={save}
-            disabled={busy || !name || !target}
+            disabled={busy || !name || !target || (type === 'TELEGRAM' && !signingSecret)}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-60"
           >
             {busy ? 'Saving…' : 'Create'}
@@ -284,7 +291,7 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
       <div className="flex flex-col gap-4">
         <div>
           <span className={labelCls}>Type</span>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {CHANNEL_TYPES.map((t) => (
               <button
                 key={t}
@@ -304,7 +311,9 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ops team" className={inputCls} />
         </div>
         <div>
-          <label className={labelCls}>{type === 'EMAIL' ? 'Address' : 'URL'}</label>
+          <label className={labelCls}>
+            {type === 'EMAIL' ? 'Address' : type === 'TELEGRAM' ? 'Chat ID' : 'URL'}
+          </label>
           <input
             value={target}
             onChange={(e) => setTarget(e.target.value)}
@@ -324,6 +333,21 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
             />
             <p className="mt-1 text-xs text-faint">
               Sent as an <code className="font-mono">x-cronapp-signature</code> header. Write-only.
+            </p>
+          </div>
+        )}
+        {type === 'TELEGRAM' && (
+          <div>
+            <label className={labelCls}>Bot token</label>
+            <input
+              value={signingSecret}
+              onChange={(e) => setSigningSecret(e.target.value)}
+              placeholder="123456:ABC-DEF…"
+              className={`${inputCls} font-mono`}
+            />
+            <p className="mt-1 text-xs text-faint">
+              From <code className="font-mono">@BotFather</code> when you create the bot. Stored write-only; add the
+              bot to your chat first.
             </p>
           </div>
         )}

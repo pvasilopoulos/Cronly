@@ -26,6 +26,14 @@ export interface NotifyPayload {
   runId?: string;
 }
 
+export interface NotifyOptions {
+  /** Deliver to every active member regardless of their event policy / quiet
+   *  hours. Used for the daily digest, which is an explicit opt-in per tenant. */
+  ignorePolicy?: boolean;
+  /** Override the stored severity for this notification. */
+  severity?: string;
+}
+
 /** HH:MM in the given IANA timezone. */
 function nowHHMM(tz: string): string {
   try {
@@ -47,7 +55,12 @@ function inQuietHours(start: string | null, end: string | null, tz: string | nul
   return start <= end ? cur >= start && cur < end : cur >= start || cur < end;
 }
 
-export async function notifyTenant(tenantId: string, event: string, payload: NotifyPayload): Promise<void> {
+export async function notifyTenant(
+  tenantId: string,
+  event: string,
+  payload: NotifyPayload,
+  opts: NotifyOptions = {},
+): Promise<void> {
   const prisma = getPrisma();
   try {
     // Phase 1 (atomic): decide recipients by policy, write the in-app rows, and
@@ -60,6 +73,7 @@ export async function notifyTenant(tenantId: string, event: string, payload: Not
       const prefByUser = new Map(prefs.map((p) => [p.userId, p]));
 
       const notified = members.filter((m) => {
+        if (opts.ignorePolicy) return true;
         const pref = prefByUser.get(m.userId);
         const events = pref ? jsonArray(pref.events) : DEFAULT_EVENTS;
         if (!events.includes(event)) return false;
@@ -73,7 +87,7 @@ export async function notifyTenant(tenantId: string, event: string, payload: Not
           tenantId,
           userId: m.userId,
           type: event,
-          severity: SEVERITY[event] ?? 'WARNING',
+          severity: opts.severity ?? SEVERITY[event] ?? 'WARNING',
           title: payload.title,
           body: payload.body ?? null,
           jobId: payload.jobId ?? null,

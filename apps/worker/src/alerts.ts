@@ -123,11 +123,17 @@ interface AlertEvent {
   consecutive: number;
 }
 
+// Telegram messages are plain text like Slack, so they reuse the SLACK template
+// rather than needing their own template channel key.
+export function templateChannelFor(type: string): 'EMAIL' | 'SLACK' | 'WEBHOOK' {
+  return type === 'TELEGRAM' ? 'SLACK' : (type as 'EMAIL' | 'SLACK' | 'WEBHOOK');
+}
+
 async function deliver(channel: any, ev: AlertEvent): Promise<void> {
   // Render the per-channel template (override or default) for this failure and
-  // deliver it. The channel type (EMAIL/SLACK/WEBHOOK) maps 1:1 to a template
-  // channel key.
-  const rendered = renderFromRows(ev.templates, ev.event, channel.type, ev.tctx);
+  // deliver it. The channel type maps 1:1 to a template channel key (TELEGRAM
+  // borrows SLACK's plain-text template).
+  const rendered = renderFromRows(ev.templates, ev.event, templateChannelFor(channel.type), ev.tctx);
   await deliverToChannel(channel, rendered);
 }
 
@@ -161,6 +167,23 @@ export async function deliverToChannel(
         'sha256=' + createHmac('sha256', channel.signingSecret).update(body).digest('hex');
     }
     await safeFetch(channel.target, { method: 'POST', headers, body });
+    return;
+  }
+
+  if (channel.type === 'TELEGRAM') {
+    // target = chat id, signingSecret = bot token. Telegram's Bot API is a public
+    // host, so the SSRF guard permits it; the token stays server-side.
+    const token = channel.signingSecret;
+    if (!token) {
+      console.error(`[alert:telegram→${channel.target}] no bot token configured on channel`);
+      return;
+    }
+    const text = (rendered.subject ? `${rendered.subject}\n` : '') + rendered.body;
+    await safeFetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ chat_id: channel.target, text, disable_web_page_preview: true }),
+    });
     return;
   }
 
