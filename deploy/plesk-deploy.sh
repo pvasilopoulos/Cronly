@@ -86,6 +86,13 @@ set +a
 set -x
 [ -n "${DATABASE_URL:-}" ] || { echo "ERROR: DATABASE_URL is empty after loading .env"; exit 1; }
 echo "DATABASE_URL loaded (host: $(echo "$DATABASE_URL" | sed -E 's#.*@([^/?]+).*#\1#'))"
+
+# Auto-heal: if a previous deploy left a migration in a failed state, mark it
+# rolled-back so `migrate deploy` can retry it. Runs via the Prisma engine (no
+# psql needed); the error on a brand-new DB (table not created yet) is ignored.
+echo 'UPDATE "_prisma_migrations" SET rolled_back_at = now() WHERE finished_at IS NULL AND rolled_back_at IS NULL;' \
+  | npx prisma db execute --schema packages/database/prisma/schema.prisma --stdin 2>/dev/null || true
+
 npm run db:migrate:deploy
 
 # ── Start / reload the four processes under PM2 (no global install needed) ────
