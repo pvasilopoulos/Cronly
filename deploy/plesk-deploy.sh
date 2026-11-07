@@ -91,6 +91,11 @@ echo "DATABASE_URL loaded (host: $(echo "$DATABASE_URL" | sed -E 's#.*@([^/?]+).
 # role — no superuser needed. No-op when the function already exists.
 npx prisma db execute --file deploy/ensure-uuid.sql --schema packages/database/prisma/schema.prisma
 
+# Ensure a "cronapp" role exists that the app role belongs to, so the migrations'
+# GRANT ... TO cronapp statements apply (works when the login role is named
+# differently). Needs CREATEROLE on the app role; no-op if it's already cronapp.
+npx prisma db execute --file deploy/ensure-role.sql --schema packages/database/prisma/schema.prisma
+
 # Auto-heal: if a previous deploy left a migration in a failed state, mark it
 # rolled-back so `migrate deploy` can retry it. Runs via the Prisma engine (no
 # psql needed); the error on a brand-new DB (table not created yet) is ignored.
