@@ -75,6 +75,17 @@ if ! grep -q '^VAPID_PUBLIC_KEY=.\+' .env; then
 fi
 
 # ── Database migrations (schema + RLS policies) ───────────────────────────────
+# The Prisma CLI only auto-loads a .env sitting next to the schema, but ours is
+# at the repo root. Export it into the environment so `prisma migrate deploy`
+# sees DATABASE_URL. xtrace is turned off around this so secrets stay out of the
+# log; the parser (set -a) exports every assignment it sources.
+set +x
+set -a
+. ./.env
+set +a
+set -x
+[ -n "${DATABASE_URL:-}" ] || { echo "ERROR: DATABASE_URL is empty after loading .env"; exit 1; }
+echo "DATABASE_URL loaded (host: $(echo "$DATABASE_URL" | sed -E 's#.*@([^/?]+).*#\1#'))"
 npm run db:migrate:deploy
 
 # ── Start / reload the four processes under PM2 (no global install needed) ────
