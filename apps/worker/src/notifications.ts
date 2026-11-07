@@ -13,6 +13,10 @@ const SEVERITY: Record<string, string> = {
   'job.timeout': 'CRITICAL',
   'job.dead_letter': 'CRITICAL',
   'heartbeat.missed': 'WARNING',
+  'response.2xx': 'INFO',
+  'response.3xx': 'INFO',
+  'response.4xx': 'WARNING',
+  'response.5xx': 'CRITICAL',
 };
 
 export interface NotifyPayload {

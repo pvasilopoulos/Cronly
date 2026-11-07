@@ -5,6 +5,7 @@ import { isUnlimited, quotaForPlan } from '@cronapp/rbac';
 import { HANDLERS } from './handlers';
 import { resolvePayloadSecrets } from './secrets';
 import { maybeAlert } from './alerts';
+import { notifyTenant } from './notifications';
 import { monitorHeartbeatsOnce } from './heartbeat';
 import { logJson } from './logger';
 
@@ -181,6 +182,24 @@ async function processRun(d: Data): Promise<void> {
       durationMs,
       attempt,
     });
+
+    // HTTP response-status notifications (opt-in per user): when the handler made
+    // an upstream HTTP call, emit response.<class> so a member can be alerted on
+    // 2xx / 3xx / 4xx / 5xx outcomes. notifyTenant applies each user's policy, so
+    // nobody is notified unless they explicitly enabled that class.
+    if (typeof result.status === 'number') {
+      const cls = Math.floor(result.status / 100);
+      const event =
+        cls === 2 ? 'response.2xx' : cls === 3 ? 'response.3xx' : cls === 4 ? 'response.4xx' : cls === 5 ? 'response.5xx' : null;
+      if (event) {
+        await notifyTenant(tenantId, event, {
+          title: `${job.name}: HTTP ${result.status}`,
+          body: `${job.handler} returned HTTP ${result.status}.`,
+          jobId,
+          runId,
+        }).catch((e: any) => console.error('[notify] response-status fan-out failed', e?.message ?? e));
+      }
+    }
   } catch (err: any) {
     const durationMs = Date.now() - startedAt;
     const isTimeout = err?.name === 'AbortError';

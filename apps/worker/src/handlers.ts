@@ -13,6 +13,8 @@ export interface HandlerResult {
   body: Buffer;
   /** Soft warning (run succeeds but is flagged), e.g. non-2xx that you tolerate. */
   warning?: string;
+  /** HTTP status of the upstream response, when the handler made one (http/webhook). */
+  status?: number;
 }
 
 export interface HandlerCtx {
@@ -46,7 +48,7 @@ const httpRequest: Handler = async (payload, ctx) => {
     const res = await safeFetch(url, { method, headers: payload?.headers, body, signal: controller.signal });
     const buf = Buffer.from(await res.arrayBuffer());
     const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
-    return { contentType, body: buf, warning: res.ok ? undefined : `Upstream responded ${res.status}` };
+    return { contentType, body: buf, status: res.status, warning: res.ok ? undefined : `Upstream responded ${res.status}` };
   } finally {
     clearTimeout(timer);
   }
@@ -73,7 +75,7 @@ const webhook: Handler = async (payload, ctx) => {
     });
     const buf = Buffer.from(await res.arrayBuffer());
     const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
-    return { contentType, body: buf, warning: res.ok ? undefined : `Upstream responded ${res.status}` };
+    return { contentType, body: buf, status: res.status, warning: res.ok ? undefined : `Upstream responded ${res.status}` };
   } finally {
     clearTimeout(timer);
   }
