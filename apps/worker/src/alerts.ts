@@ -12,13 +12,32 @@ import { renderFromRows, type TemplateRow } from './templates';
 // infrastructure.
 
 export type TerminalStatus = 'FAILED' | 'TIMEOUT' | 'DEAD_LETTER';
-const TERMINAL = new Set<string>(['FAILED', 'TIMEOUT', 'DEAD_LETTER']);
+/** Statuses an alert rule may fire on: terminal failures + completed outcomes. */
+export type AlertableStatus = TerminalStatus | 'WARNING' | 'SUCCESS';
+
+const FAILURE = new Set<string>(['FAILED', 'TIMEOUT', 'DEAD_LETTER']);
+const TRANSIENT = new Set<string>(['QUEUED', 'RUNNING']);
+
+const EVENT_FOR: Record<AlertableStatus, string> = {
+  FAILED: 'job.failed',
+  TIMEOUT: 'job.timeout',
+  DEAD_LETTER: 'job.dead_letter',
+  WARNING: 'job.warning',
+  SUCCESS: 'job.success',
+};
+const SEVERITY_FOR: Record<AlertableStatus, string> = {
+  FAILED: 'CRITICAL',
+  TIMEOUT: 'CRITICAL',
+  DEAD_LETTER: 'CRITICAL',
+  WARNING: 'WARNING',
+  SUCCESS: 'INFO',
+};
 
 export async function maybeAlert(
   tenantId: string,
   jobId: string,
   runId: string,
-  status: TerminalStatus,
+  status: AlertableStatus,
 ): Promise<void> {
   const prisma = getPrisma();
 
@@ -52,20 +71,30 @@ export async function maybeAlert(
 
   if (!ctx.job) return;
 
-  // Consecutive terminal failures counting back from the latest run.
-  let consecutive = 0;
-  for (const r of ctx.recent) {
-    if (TERMINAL.has(r.status)) consecutive++;
-    else break;
-  }
+  const event = EVENT_FOR[status];
+  const isFailure = FAILURE.has(status);
 
-  const event =
-    status === 'TIMEOUT' ? 'job.timeout' : status === 'DEAD_LETTER' ? 'job.dead_letter' : 'job.failed';
+  // Per-rule streak: the most-recent *completed* runs whose status the rule
+  // watches, counted back from the latest run (ignoring transient QUEUED/RUNNING
+  // rows). The current run is recent[0] — it was stamped just before this call —
+  // so a streak of N is this run plus N-1 like-statused runs right before it.
+  // This generalises the old "consecutive failures" count to any status set, so
+  // a SUCCESS rule with threshold 3 fires on three clean runs in a row, etc.
+  const streakFor = (onStatuses: Set<string>): number => {
+    let n = 0;
+    for (const r of ctx.recent) {
+      if (TRANSIENT.has(r.status)) continue;
+      if (onStatuses.has(r.status)) n++;
+      else break;
+    }
+    return n;
+  };
 
-  // One context drives every channel's template for this failure.
+  // One mutable context drives every channel's template for this event; the
+  // consecutive count is set per rule just before each delivery.
   const tctx: TemplateContext = {
     event,
-    severity: 'CRITICAL',
+    severity: SEVERITY_FOR[status],
     job: {
       name: ctx.job.name,
       id: ctx.job.id,
@@ -74,29 +103,35 @@ export async function maybeAlert(
       description: ctx.job.description,
     },
     run: { id: runId, status, error: ctx.run?.error, attempt: ctx.run?.attempt, durationMs: ctx.run?.durationMs },
-    consecutive,
+    consecutive: streakFor(FAILURE),
     tenant: { name: ctx.tenant?.name },
     time: new Date().toISOString(),
   };
 
   // In-app live notifications fan out per-user by policy, independent of the
   // tenant's channel alert rules — a member still sees a failure in their bell
-  // even when no Slack/email/webhook channel is configured. The INAPP template
-  // (override or default) supplies the title + body.
-  const inapp = renderFromRows(ctx.templates, event, 'INAPP', tctx);
-  await notifyTenant(tenantId, event, {
-    title: inapp.subject || `Job "${ctx.job.name}" ${status}`,
-    body: inapp.body,
-    jobId: ctx.job.id,
-    runId,
-  });
+  // even when no Slack/email/webhook channel is configured. Only failures fan
+  // out here; success/warning notifications would be too noisy per-run and are
+  // delivered solely through the explicit alert rules evaluated below.
+  if (isFailure) {
+    const inapp = renderFromRows(ctx.templates, event, 'INAPP', tctx);
+    await notifyTenant(tenantId, event, {
+      title: inapp.subject || `Job "${ctx.job.name}" ${status}`,
+      body: inapp.body,
+      jobId: ctx.job.id,
+      runId,
+    });
+  }
 
   if (ctx.rules.length === 0) return;
 
   for (const rule of ctx.rules) {
-    if (!jsonArray(rule.onStatuses).includes(status as string)) continue;
+    const onStatuses = new Set(jsonArray(rule.onStatuses).map(String));
+    if (!onStatuses.has(status as string)) continue;
+    const streak = streakFor(onStatuses);
     // Fire exactly when the streak crosses the threshold (avoids repeat spam).
-    if (consecutive !== rule.threshold) continue;
+    if (streak !== rule.threshold) continue;
+    tctx.consecutive = streak;
     await deliver(rule.channel, {
       tenantId,
       event,
@@ -105,7 +140,7 @@ export async function maybeAlert(
       job: ctx.job,
       runId,
       status,
-      consecutive,
+      consecutive: streak,
     }).catch((e) =>
       console.error(`[alert] delivery failed (channel ${rule.channelId}):`, e?.message ?? e),
     );
@@ -119,7 +154,7 @@ interface AlertEvent {
   tctx: TemplateContext;
   job: { id: string; name: string; runbookUrl?: string | null; description?: string | null };
   runId: string;
-  status: TerminalStatus;
+  status: AlertableStatus;
   consecutive: number;
 }
 

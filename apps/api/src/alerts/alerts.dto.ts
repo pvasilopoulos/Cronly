@@ -11,7 +11,7 @@ import {
 } from 'class-validator';
 
 export const CHANNEL_TYPES = ['EMAIL', 'SLACK', 'WEBHOOK', 'TELEGRAM'] as const;
-export const ALERT_STATUSES = ['FAILED', 'TIMEOUT', 'DEAD_LETTER'] as const;
+export const ALERT_STATUSES = ['FAILED', 'TIMEOUT', 'DEAD_LETTER', 'WARNING', 'SUCCESS'] as const;
 
 export class CreateChannelDto {
   @IsIn(CHANNEL_TYPES) type!: (typeof CHANNEL_TYPES)[number];

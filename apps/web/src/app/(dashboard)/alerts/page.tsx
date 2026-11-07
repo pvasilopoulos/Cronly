@@ -8,7 +8,17 @@ import { Spinner, EmptyState } from '@/components/ui';
 import { SearchableSelect } from '@/components/SearchableSelect';
 
 const CHANNEL_TYPES: ChannelType[] = ['EMAIL', 'SLACK', 'WEBHOOK', 'TELEGRAM'];
-const ALERT_STATUSES: AlertStatus[] = ['FAILED', 'TIMEOUT', 'DEAD_LETTER'];
+const ALERT_STATUSES: AlertStatus[] = ['FAILED', 'TIMEOUT', 'DEAD_LETTER', 'WARNING', 'SUCCESS'];
+// New rules preselect the failure statuses only; WARNING/SUCCESS are opt-in to
+// avoid turning every clean run into an alert.
+const DEFAULT_RULE_STATUSES: AlertStatus[] = ['FAILED', 'TIMEOUT', 'DEAD_LETTER'];
+const STATUS_TONE: Record<AlertStatus, string> = {
+  FAILED: 'bg-err/15 text-err',
+  TIMEOUT: 'bg-err/15 text-err',
+  DEAD_LETTER: 'bg-err/15 text-err',
+  WARNING: 'bg-warn/15 text-warn',
+  SUCCESS: 'bg-ok/15 text-ok',
+};
 
 const TYPE_META: Record<ChannelType, { icon: string; label: string; placeholder: string; hint: string }> = {
   EMAIL: { icon: '✉', label: 'Email', placeholder: 'ops@example.com', hint: 'Destination email address.' },
@@ -149,7 +159,7 @@ export default function AlertsPage() {
                   {r.onStatuses.map((s) => (
                     <span
                       key={s}
-                      className="rounded-full bg-err/15 px-2 py-0.5 text-[11px] font-semibold text-err"
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATUS_TONE[s] ?? 'bg-err/15 text-err'}`}
                     >
                       {s.replace('_', ' ').toLowerCase()}
                     </span>
@@ -368,7 +378,7 @@ function RuleEditor({
   const [channelId, setChannelId] = useState(channels[0]?.id ?? '');
   const [jobId, setJobId] = useState<string>(''); // '' → all jobs
   const [threshold, setThreshold] = useState(1);
-  const [statuses, setStatuses] = useState<Set<AlertStatus>>(new Set(ALERT_STATUSES));
+  const [statuses, setStatuses] = useState<Set<AlertStatus>>(new Set(DEFAULT_RULE_STATUSES));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -452,7 +462,7 @@ function RuleEditor({
                 key={s}
                 onClick={() => toggleStatus(s)}
                 className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  statuses.has(s) ? 'bg-err/15 text-err' : 'border border-line text-faint hover:border-faint'
+                  statuses.has(s) ? STATUS_TONE[s] : 'border border-line text-faint hover:border-faint'
                 }`}
               >
                 {s.replace('_', ' ').toLowerCase()}

@@ -187,6 +187,14 @@ async function processRun(d: Data): Promise<void> {
       attempt,
     });
 
+    // Evaluate channel alert rules for the completed outcome. Rules watching
+    // SUCCESS / WARNING deliver here (e.g. "notify after 3 clean runs" or "alert
+    // on any warning"); maybeAlert no-ops when no rule matches, so a plain
+    // success with only failure rules costs just a couple of indexed queries.
+    await maybeAlert(tenantId, jobId, runId, result.warning ? 'WARNING' : 'SUCCESS').catch((e) =>
+      console.error('[alert] evaluation failed', e?.message ?? e),
+    );
+
     // HTTP response-status notifications (opt-in per user): when the handler made
     // an upstream HTTP call, emit response.<class> so a member can be alerted on
     // 2xx / 3xx / 4xx / 5xx outcomes. notifyTenant applies each user's policy, so

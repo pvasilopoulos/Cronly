@@ -136,7 +136,7 @@ export interface Secret {
 }
 
 export type ChannelType = 'EMAIL' | 'SLACK' | 'WEBHOOK' | 'TELEGRAM';
-export type AlertStatus = 'FAILED' | 'TIMEOUT' | 'DEAD_LETTER';
+export type AlertStatus = 'FAILED' | 'TIMEOUT' | 'DEAD_LETTER' | 'WARNING' | 'SUCCESS';
 
 export interface NotificationChannel {
   id: string;

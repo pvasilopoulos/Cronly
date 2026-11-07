@@ -1,6 +1,6 @@
 import { IsBoolean, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
-const EVENTS = ['job.failed', 'job.timeout', 'job.dead_letter', 'heartbeat.missed'];
+const EVENTS = ['job.failed', 'job.timeout', 'job.dead_letter', 'job.warning', 'job.success', 'heartbeat.missed'];
 const CHANNELS = ['INAPP', 'EMAIL', 'SLACK', 'WEBHOOK', 'TELEGRAM'];
 
 export class UpsertTemplateDto {
