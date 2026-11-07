@@ -8,6 +8,7 @@ import { fmtAgo, fmtMs } from '@/lib/format';
 import type { Job, JobDetail, Run, RunStatus, Heartbeat, NotificationChannel } from '@/lib/types';
 import { Cron, JobPill, RunPill, Spinner, Toggle, EmptyState } from '@/components/ui';
 import { ResponseViewer } from '@/components/ResponseViewer';
+import { JobNotifications } from '@/components/JobNotifications';
 import { CronBuilder } from '@/components/CronBuilder';
 import { SearchableSelect } from '@/components/SearchableSelect';
 import { isValidCron, describeCron } from '@/lib/cron';
@@ -1211,6 +1212,8 @@ function JobDrawer({
           </div>
 
           <HeartbeatPanel jobId={job.id} />
+
+          <JobNotifications jobId={job.id} />
 
           <RecentRuns job={job} runs={runs} onOpen={setOpenRun} />
 
