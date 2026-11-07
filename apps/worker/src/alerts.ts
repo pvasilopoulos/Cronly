@@ -129,8 +129,12 @@ export async function maybeAlert(
     const onStatuses = new Set(jsonArray(rule.onStatuses).map(String));
     if (!onStatuses.has(status as string)) continue;
     const streak = streakFor(onStatuses);
-    // Fire exactly when the streak crosses the threshold (avoids repeat spam).
-    if (streak !== rule.threshold) continue;
+    // Failures fire ONCE, exactly when the streak reaches the threshold, so a
+    // persistent outage doesn't re-alert on every subsequent run. Success /
+    // warning are recurring notifications, so they fire on EVERY matching run
+    // once the streak is long enough — with threshold 1 that means "every time".
+    const fire = isFailure ? streak === rule.threshold : streak >= rule.threshold;
+    if (!fire) continue;
     tctx.consecutive = streak;
     await deliver(rule.channel, {
       tenantId,
@@ -218,11 +222,18 @@ export async function deliverToChannel(
       return;
     }
     const text = (rendered.subject ? `${rendered.subject}\n` : '') + rendered.body;
-    await safeFetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const res = await safeFetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ chat_id: channel.target, text, disable_web_page_preview: true }),
     });
+    // Telegram answers 2xx with {ok:true}, or 4xx with {ok:false, description}.
+    // fetch doesn't throw on 4xx, so a wrong chat id or bot token would fail
+    // silently — surface it to the caller's catch (and the worker log) instead.
+    if (!res.ok) {
+      const detail = await res.text().catch(() => '');
+      throw new Error(`Telegram sendMessage failed (${res.status}): ${detail.slice(0, 300)}`);
+    }
     return;
   }
 
