@@ -104,6 +104,16 @@ echo 'UPDATE "_prisma_migrations" SET rolled_back_at = now() WHERE finished_at I
 
 npm run db:migrate:deploy
 
+# ── Seed the platform super-admin + demo workspace ONCE ───────────────────────
+# Guarded by a sentinel file so it runs only on the first successful deploy
+# (the .seeded marker is untracked and survives pulls, like .env). Delete it to
+# force a reseed.
+if [ ! -f .seeded ]; then
+  echo "Seeding initial data (first deploy)..."
+  npm run db:seed
+  touch .seeded
+fi
+
 # ── Start / reload the four processes under PM2 (no global install needed) ────
 npx pm2 reload ecosystem.config.js --update-env || npx pm2 start ecosystem.config.js
 npx pm2 save
