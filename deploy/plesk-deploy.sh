@@ -25,9 +25,17 @@ echo "=== CronApp deploy @ $(date) ==="
 echo "Deploying in: $(pwd)"
 
 # ── Locate the Node runtime installed by the Plesk Node.js extension ──────────
-# Plesk installs each Node version under /opt/plesk/node/<N>/bin. Pick the
-# highest available and put it on PATH so node/npm/npx resolve.
-NODE_BIN="$(ls -d /opt/plesk/node/*/bin 2>/dev/null | sort -V | tail -1)"
+# Plesk installs each Node version under /opt/plesk/node/<N>/bin. Prefer the
+# project's supported LTS (Node 20) — newer majors (24/26) lack prebuilt
+# Prisma/Next engines and break the build. Fall back to the next LTS, then to
+# whatever is highest if none of those exist.
+NODE_BIN=""
+for v in 20 22 18 24 21 26; do
+  if [ -d "/opt/plesk/node/$v/bin" ]; then NODE_BIN="/opt/plesk/node/$v/bin"; break; fi
+done
+if [ -z "$NODE_BIN" ]; then
+  NODE_BIN="$(ls -d /opt/plesk/node/*/bin 2>/dev/null | sort -V | tail -1)"
+fi
 if [ -n "$NODE_BIN" ]; then export PATH="$NODE_BIN:$PATH"; fi
 if ! command -v node >/dev/null 2>&1; then
   echo "ERROR: node not found. In Plesk > Websites & Domains > Node.js, enable Node.js 20 for this domain, then redeploy."
