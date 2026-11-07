@@ -18,8 +18,8 @@ packages/database/src/generated/
 npm-debug.log*
 logs/
 
-# storage (local response payloads in dev)
-storage/
+# storage (local response payloads in dev) — root dir only, NOT packages/storage
+/storage/
 
 # os / editor
 .DS_Store
