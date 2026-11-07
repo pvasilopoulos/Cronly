@@ -7,6 +7,7 @@ import { fetcher } from '@/lib/api';
 import { fmtMs } from '@/lib/format';
 import type { JobDetail } from '@/lib/types';
 import { Spinner, EmptyState } from '@/components/ui';
+import { JobNotifications } from '@/components/JobNotifications';
 
 interface Bucket {
   day: string;
@@ -97,6 +98,9 @@ export default function JobDashboardPage() {
           </section>
         </>
       )}
+
+      {/* Per-job notifications — independent of the metrics range/state above. */}
+      {id && <JobNotifications jobId={id} />}
     </div>
   );
 }

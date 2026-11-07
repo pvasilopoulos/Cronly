@@ -1,8 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Put } from '@nestjs/common';
 import { CurrentPrincipal, RequirePermissions } from '../auth/decorators';
 import type { Principal } from '../rbac/principal.service';
 import { AlertsService } from './alerts.service';
-import { CreateChannelDto, CreateRuleDto } from './alerts.dto';
+import { CreateChannelDto, CreateRuleDto, UpdateRuleDto } from './alerts.dto';
 
 @Controller('alerts')
 export class AlertsController {
@@ -36,6 +36,12 @@ export class AlertsController {
   @RequirePermissions('alerts:manage')
   createRule(@CurrentPrincipal() p: Principal, @Body() dto: CreateRuleDto) {
     return this.alerts.createRule(p, dto);
+  }
+
+  @Put('rules/:id')
+  @RequirePermissions('alerts:manage')
+  updateRule(@CurrentPrincipal() p: Principal, @Param('id') id: string, @Body() dto: UpdateRuleDto) {
+    return this.alerts.updateRule(p, id, dto);
   }
 
   @Delete('rules/:id')

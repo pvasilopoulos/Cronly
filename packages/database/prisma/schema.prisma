@@ -500,6 +500,13 @@ model AlertRule {
   // Terminal statuses that trigger the alert. JSON array of RunStatus values
   // (MySQL has no native array type).
   onStatuses Json        @default("[\"FAILED\", \"TIMEOUT\", \"DEAD_LETTER\"]")
+  // Optional per-rule message override. When `body` is set the worker renders it
+  // with the same {{ variable }} engine instead of the workspace/built-in
+  // template for this channel — so one job can have its own alert text (e.g. a
+  // custom Telegram message). `subject` is used only by channels that have one
+  // (email); blank → fall back to the workspace template, then the default.
+  subject    String?
+  body       String?     @db.Text
   enabled    Boolean     @default(true)
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt

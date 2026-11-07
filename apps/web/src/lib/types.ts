@@ -359,6 +359,8 @@ export interface AlertRule {
   jobId: string | null;
   threshold: number;
   onStatuses: AlertStatus[];
+  subject: string | null;
+  body: string | null;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;

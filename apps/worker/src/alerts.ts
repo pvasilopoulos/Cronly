@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { getPrisma, jsonArray } from '@cronapp/database';
-import type { TemplateContext } from '@cronapp/templating';
+import { renderFields, type TemplateChannel, type TemplateContext } from '@cronapp/templating';
 import { safeFetch } from './net-guard';
 import { sendMail } from './mailer';
 import { notifyTenant } from './notifications';
@@ -141,6 +141,7 @@ export async function maybeAlert(
       runId,
       status,
       consecutive: streak,
+      custom: rule.body ? { subject: rule.subject ?? null, body: rule.body } : null,
     }).catch((e) =>
       console.error(`[alert] delivery failed (channel ${rule.channelId}):`, e?.message ?? e),
     );
@@ -156,13 +157,23 @@ interface AlertEvent {
   runId: string;
   status: AlertableStatus;
   consecutive: number;
+  /** Per-rule message override (AlertRule.subject/body); null → use templates. */
+  custom?: { subject: string | null; body: string } | null;
 }
 
 async function deliver(channel: any, ev: AlertEvent): Promise<void> {
-  // Render the per-channel template (override or default) for this failure and
-  // deliver it. The channel type maps 1:1 to a template channel key.
-  const rendered = renderFromRows(ev.templates, ev.event, channel.type, ev.tctx);
-  await deliverToChannel(channel, rendered);
+  // A rule may carry its own message (per-job custom text). When it does, render
+  // that with the same engine as the shared templates (JSON-escaped for WEBHOOK);
+  // otherwise fall back to the tenant override or the built-in default copy. The
+  // channel type maps 1:1 to a template channel key.
+  const rendered = ev.custom
+    ? renderFields(
+        { subject: ev.custom.subject, body: ev.custom.body },
+        ev.tctx,
+        channel.type as TemplateChannel,
+      )
+    : renderFromRows(ev.templates, ev.event, channel.type, ev.tctx);
+  await deliverToChannel(channel, { subject: rendered.subject ?? null, body: rendered.body });
 }
 
 /**
