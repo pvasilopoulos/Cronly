@@ -29,6 +29,11 @@ class ResetPasswordDto {
   @IsString() @MinLength(8) password!: string;
 }
 
+class ChangePasswordDto {
+  @IsString() currentPassword!: string;
+  @IsString() @MinLength(8) newPassword!: string;
+}
+
 class CodeDto {
   @IsString() @Length(6, 9) code!: string;
 }
@@ -87,6 +92,13 @@ export class AuthController {
   @Post('reset-password')
   resetPassword(@Body() dto: ResetPasswordDto) {
     return this.auth.resetPassword(dto.token, dto.password);
+  }
+
+  // ── Change password (authenticated: current password required) ──
+  @RateLimit({ limit: 10, windowMs: 60_000, name: 'change-password' })
+  @Post('change-password')
+  changePassword(@CurrentUser() user: AuthUser, @Body() dto: ChangePasswordDto) {
+    return this.auth.changePassword(user.userId, dto.currentPassword, dto.newPassword);
   }
 
   // ── Two-factor (TOTP) ── (all require an authenticated session)

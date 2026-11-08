@@ -5,9 +5,10 @@ import useSWR, { mutate as globalMutate } from 'swr';
 import { api, fetcher } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions';
 import { fmtAgo, fmtMs } from '@/lib/format';
-import type { Job, JobDetail, Run, RunStatus, Heartbeat, NotificationChannel } from '@/lib/types';
+import type { Job, JobDetail, Run, RunStatus, Heartbeat, NotificationChannel, OverlapPolicy } from '@/lib/types';
 import { Cron, JobPill, RunPill, Spinner, Toggle, EmptyState } from '@/components/ui';
 import { ResponseViewer } from '@/components/ResponseViewer';
+import { JobNotifications } from '@/components/JobNotifications';
 import { CronBuilder } from '@/components/CronBuilder';
 import { SearchableSelect } from '@/components/SearchableSelect';
 import { isValidCron, describeCron } from '@/lib/cron';
@@ -15,6 +16,12 @@ import { HANDLER_CATALOG, getHandler, validatePayload, type HandlerDef } from '@
 
 type StatusFilter = 'all' | 'active' | 'paused';
 type SortKey = 'name' | 'next' | 'handler';
+
+const OVERLAP_LABEL: Record<OverlapPolicy, string> = {
+  ALLOW: 'Allow overlap',
+  SKIP: 'Skip if running',
+  QUEUE: 'Queue (run after)',
+};
 
 const UNGROUPED_KEY = '__ungrouped';
 
@@ -52,13 +59,34 @@ export default function JobsPage() {
   const [handlerFilter, setHandlerFilter] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  // Jobs currently being queued, and jobs just queued (brief "✓" confirmation).
+  const [running, setRunning] = useState<Set<string>>(new Set());
+  const [queued, setQueued] = useState<Set<string>>(new Set());
 
   async function toggle(job: Job) {
     await api(`/jobs/${job.id}/toggle`, { method: 'POST' });
     globalMutate('/jobs');
   }
   async function runNow(job: Job) {
-    await api(`/jobs/${job.id}/run`, { method: 'POST' });
+    if (running.has(job.id)) return;
+    setRunning((s) => new Set(s).add(job.id));
+    try {
+      await api(`/jobs/${job.id}/run`, { method: 'POST' });
+      // Refresh this job's run history if its drawer is open.
+      globalMutate(`/jobs/${job.id}/runs`);
+      setQueued((s) => new Set(s).add(job.id));
+      setTimeout(() => setQueued((s) => {
+        const next = new Set(s);
+        next.delete(job.id);
+        return next;
+      }), 2500);
+    } finally {
+      setRunning((s) => {
+        const next = new Set(s);
+        next.delete(job.id);
+        return next;
+      });
+    }
   }
 
   const all = jobs ?? [];
@@ -224,9 +252,14 @@ export default function JobsPage() {
                       {can('jobs:run') && (
                         <button
                           onClick={() => runNow(j)}
-                          className="rounded-md border border-line px-2.5 py-1 text-xs font-medium hover:border-faint"
+                          disabled={running.has(j.id)}
+                          className={`rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-60 ${
+                            queued.has(j.id)
+                              ? 'border-ok/40 text-ok'
+                              : 'border-line hover:border-faint'
+                          }`}
                         >
-                          ▶ Run
+                          {running.has(j.id) ? '…' : queued.has(j.id) ? '✓ Queued' : '▶ Run'}
                         </button>
                       )}
                     </td>
@@ -281,9 +314,12 @@ export default function JobsPage() {
                     {can('jobs:run') && (
                       <button
                         onClick={() => runNow(j)}
-                        className="rounded-md border border-line px-2.5 py-1 text-xs font-medium"
+                        disabled={running.has(j.id)}
+                        className={`rounded-md border px-2.5 py-1 text-xs font-medium disabled:opacity-60 ${
+                          queued.has(j.id) ? 'border-ok/40 text-ok' : 'border-line'
+                        }`}
                       >
-                        ▶
+                        {running.has(j.id) ? '…' : queued.has(j.id) ? '✓' : '▶'}
                       </button>
                     )}
                     {can('jobs:toggle') && <Toggle on={j.enabled} onClick={() => toggle(j)} />}
@@ -764,6 +800,8 @@ function JobDrawer({
   const [runbookUrl, setRunbookUrl] = useState('');
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
+  const [overlapPolicy, setOverlapPolicy] = useState<OverlapPolicy>('ALLOW');
+  const [missedAlertEnabled, setMissedAlertEnabled] = useState(true);
   const [values, setValues] = useState<Record<string, string>>({});
 
   // Reseed the editor whenever fresh detail arrives and we're not mid-edit.
@@ -780,6 +818,8 @@ function JobDrawer({
     setRunbookUrl(detail.runbookUrl ?? '');
     setStartsAt(isoToLocal(detail.startsAt));
     setEndsAt(isoToLocal(detail.endsAt));
+    setOverlapPolicy(detail.overlapPolicy ?? 'ALLOW');
+    setMissedAlertEnabled(detail.missedAlertEnabled ?? true);
     if (def) setValues(payloadToValues(def, detail.payload));
   }, [detail, editing, def]);
 
@@ -799,6 +839,8 @@ function JobDrawer({
       runbookUrl !== (detail.runbookUrl ?? '') ||
       startsAt !== isoToLocal(detail.startsAt) ||
       endsAt !== isoToLocal(detail.endsAt) ||
+      overlapPolicy !== (detail.overlapPolicy ?? 'ALLOW') ||
+      missedAlertEnabled !== (detail.missedAlertEnabled ?? true) ||
       (def ? JSON.stringify(buildPayload(def, values)) !== JSON.stringify(detail.payload ?? {}) : false));
 
   function setField(n: string, v: string) {
@@ -848,6 +890,8 @@ function JobDrawer({
           tags: tagList,
           maxRetries: mr,
           timeoutMs: to,
+          overlapPolicy,
+          missedAlertEnabled,
           description: description.trim(),
           runbookUrl: runbookUrl.trim(),
           startsAt: startsAt ? startIso : '',
@@ -885,6 +929,8 @@ function JobDrawer({
     setRunbookUrl(detail.runbookUrl ?? '');
     setStartsAt(isoToLocal(detail.startsAt));
     setEndsAt(isoToLocal(detail.endsAt));
+    setOverlapPolicy(detail.overlapPolicy ?? 'ALLOW');
+    setMissedAlertEnabled(detail.missedAlertEnabled ?? true);
     if (def) setValues(payloadToValues(def, detail.payload));
   }
 
@@ -930,6 +976,11 @@ function JobDrawer({
               )}
             </div>
             <code className="font-mono text-xs text-muted">{cronExpr} · {timezone}</code>
+            <div className="mt-1">
+              <Link href={`/jobs/${job.id}`} className="text-xs font-medium text-accent-fg hover:underline">
+                ↗ Open dashboard
+              </Link>
+            </div>
           </div>
           <button onClick={onClose} className="rounded-md p-1 text-xl text-faint hover:bg-surface2">
             ×
@@ -976,6 +1027,14 @@ function JobDrawer({
                   <div>
                     <dt className="text-[11px] uppercase tracking-wide text-faint">Timeout</dt>
                     <dd className="text-muted">{detail ? `${Math.round(detail.timeoutMs / 1000)}s` : '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] uppercase tracking-wide text-faint">On overlap</dt>
+                    <dd className="text-muted">{OVERLAP_LABEL[detail?.overlapPolicy ?? 'ALLOW']}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] uppercase tracking-wide text-faint">Missed-run alert</dt>
+                    <dd className="text-muted">{(detail?.missedAlertEnabled ?? true) ? 'On' : 'Off'}</dd>
                   </div>
                 </div>
                 {detail?.tags && detail.tags.length > 0 && (
@@ -1114,6 +1173,34 @@ function JobDrawer({
                 </div>
 
                 <label className="flex flex-col gap-1 text-sm">
+                  <span className="font-medium text-muted">When a previous run is still active</span>
+                  <select
+                    value={overlapPolicy}
+                    onChange={(e) => setOverlapPolicy(e.target.value as OverlapPolicy)}
+                    className="w-full rounded-lg border border-line bg-surface px-3 py-2 outline-none focus:border-accent"
+                  >
+                    <option value="ALLOW">Allow overlap — run anyway</option>
+                    <option value="SKIP">Skip this run</option>
+                    <option value="QUEUE">Queue — run after the current one finishes</option>
+                  </select>
+                </label>
+
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={missedAlertEnabled}
+                    onChange={(e) => setMissedAlertEnabled(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span className="text-muted">
+                    <span className="font-medium">Alert if a scheduled run is missed</span>
+                    <span className="block text-[12px] text-faint">
+                      Notifies this job’s alert channels if the scheduler never fires a run on time (e.g. downtime).
+                    </span>
+                  </span>
+                </label>
+
+                <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-muted">Description</span>
                   <textarea
                     value={description}
@@ -1177,6 +1264,8 @@ function JobDrawer({
           </div>
 
           <HeartbeatPanel jobId={job.id} />
+
+          <JobNotifications jobId={job.id} />
 
           <RecentRuns job={job} runs={runs} onOpen={setOpenRun} />
 
@@ -1554,6 +1643,8 @@ function CreateJobModal({
   const [maxRetries, setMaxRetries] = useState(String(template?.maxRetries ?? 3));
   const [timeoutMs, setTimeoutMs] = useState(String(template?.timeoutMs ?? 30000));
   const [concurrencyKey, setConcurrencyKey] = useState(template?.concurrencyKey ?? '');
+  const [overlapPolicy, setOverlapPolicy] = useState<OverlapPolicy>(template?.overlapPolicy ?? 'ALLOW');
+  const [missedAlertEnabled, setMissedAlertEnabled] = useState(template?.missedAlertEnabled ?? true);
   const [startPaused, setStartPaused] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1615,6 +1706,8 @@ function CreateJobModal({
           maxRetries: mr,
           timeoutMs: to,
           concurrencyKey: concurrencyKey.trim() || undefined,
+          overlapPolicy,
+          missedAlertEnabled,
           enabled: startPaused ? false : undefined,
           description: description.trim() || undefined,
           runbookUrl: runbookUrl.trim() || undefined,
@@ -1824,6 +1917,21 @@ function CreateJobModal({
                     className={windowCls}
                   />
                 </Field>
+                <Field label="When a previous run is still active">
+                  <select
+                    value={overlapPolicy}
+                    onChange={(e) => setOverlapPolicy(e.target.value as OverlapPolicy)}
+                    className={windowCls}
+                  >
+                    <option value="ALLOW">Allow overlap — run anyway</option>
+                    <option value="SKIP">Skip this run</option>
+                    <option value="QUEUE">Queue — run after the current one finishes</option>
+                  </select>
+                </Field>
+                <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line bg-surface2/50 px-3 py-2.5 text-sm">
+                  <input type="checkbox" checked={missedAlertEnabled} onChange={(e) => setMissedAlertEnabled(e.target.checked)} className="h-4 w-4 accent-accent" />
+                  <span>Alert if a scheduled run is missed (e.g. scheduler downtime)</span>
+                </label>
                 <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line bg-surface2/50 px-3 py-2.5 text-sm">
                   <input type="checkbox" checked={startPaused} onChange={(e) => setStartPaused(e.target.checked)} className="h-4 w-4 accent-accent" />
                   <span>Create paused (don’t schedule until resumed)</span>

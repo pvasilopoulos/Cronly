@@ -22,6 +22,14 @@ export function SecurityPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Change-password form
+  const [curPw, setCurPw] = useState('');
+  const [newPw, setNewPw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwError, setPwError] = useState<string | null>(null);
+  const [pwOk, setPwOk] = useState(false);
+
   const load = useCallback(async () => {
     try {
       setStatus(await api<TfaStatus>('/auth/2fa', { tenant: false }));
@@ -79,6 +87,36 @@ export function SecurityPanel() {
       setError(err instanceof ApiError ? err.message : 'Invalid code');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function changePassword(e: React.FormEvent) {
+    e.preventDefault();
+    setPwError(null);
+    setPwOk(false);
+    if (newPw.length < 8) {
+      setPwError('New password must be at least 8 characters');
+      return;
+    }
+    if (newPw !== confirmPw) {
+      setPwError('New passwords do not match');
+      return;
+    }
+    setPwBusy(true);
+    try {
+      await api('/auth/change-password', {
+        method: 'POST',
+        body: { currentPassword: curPw, newPassword: newPw },
+        tenant: false,
+      });
+      setPwOk(true);
+      setCurPw('');
+      setNewPw('');
+      setConfirmPw('');
+    } catch (err) {
+      setPwError(err instanceof ApiError ? err.message : 'Could not change password');
+    } finally {
+      setPwBusy(false);
     }
   }
 
@@ -202,6 +240,49 @@ export function SecurityPanel() {
 
         {error && <p className="mt-2 rounded-lg bg-err/10 px-3 py-2 text-sm text-err">{error}</p>}
       </div>
+
+      {/* Password */}
+      <form onSubmit={changePassword} className="mb-5 border-t border-line pt-4">
+        <p className="text-sm font-medium">Password</p>
+        <p className="mb-3 text-xs text-muted">Change the password you use to sign in.</p>
+        <div className="grid gap-2 sm:max-w-sm">
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={curPw}
+            onChange={(e) => setCurPw(e.target.value)}
+            placeholder="Current password"
+            className="rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={newPw}
+            onChange={(e) => setNewPw(e.target.value)}
+            placeholder="New password (min 8 characters)"
+            className="rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={confirmPw}
+            onChange={(e) => setConfirmPw(e.target.value)}
+            placeholder="Confirm new password"
+            className="rounded-lg border border-line bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={pwBusy || !curPw || !newPw || !confirmPw}
+              className="rounded-lg bg-accent px-3 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-60"
+            >
+              {pwBusy ? 'Saving…' : 'Update password'}
+            </button>
+            {pwOk && <span className="text-xs text-ok">Password updated.</span>}
+          </div>
+          {pwError && <p className="rounded-lg bg-err/10 px-3 py-2 text-sm text-err">{pwError}</p>}
+        </div>
+      </form>
 
       {/* Sessions */}
       <div className="border-t border-line pt-4">

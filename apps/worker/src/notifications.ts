@@ -1,4 +1,4 @@
-import { getPrisma } from '@cronapp/database';
+import { getPrisma, jsonArray } from '@cronapp/database';
 import { sendPush, type PushSub } from './push';
 
 // Per-user notification fan-out. When an event fires, every ACTIVE member of the
@@ -7,12 +7,17 @@ import { sendPush, type PushSub } from './push';
 // policy row uses the defaults (all events on, no quiet hours). The console
 // polls these and raises browser popups client-side.
 
-const DEFAULT_EVENTS = ['job.failed', 'job.timeout', 'job.dead_letter', 'heartbeat.missed'];
+const DEFAULT_EVENTS = ['job.failed', 'job.timeout', 'job.dead_letter', 'job.missed', 'heartbeat.missed'];
 const SEVERITY: Record<string, string> = {
   'job.failed': 'CRITICAL',
   'job.timeout': 'CRITICAL',
   'job.dead_letter': 'CRITICAL',
+  'job.missed': 'WARNING',
   'heartbeat.missed': 'WARNING',
+  'response.2xx': 'INFO',
+  'response.3xx': 'INFO',
+  'response.4xx': 'WARNING',
+  'response.5xx': 'CRITICAL',
 };
 
 export interface NotifyPayload {
@@ -20,6 +25,14 @@ export interface NotifyPayload {
   body?: string;
   jobId?: string;
   runId?: string;
+}
+
+export interface NotifyOptions {
+  /** Deliver to every active member regardless of their event policy / quiet
+   *  hours. Used for the daily digest, which is an explicit opt-in per tenant. */
+  ignorePolicy?: boolean;
+  /** Override the stored severity for this notification. */
+  severity?: string;
 }
 
 /** HH:MM in the given IANA timezone. */
@@ -43,13 +56,17 @@ function inQuietHours(start: string | null, end: string | null, tz: string | nul
   return start <= end ? cur >= start && cur < end : cur >= start || cur < end;
 }
 
-export async function notifyTenant(tenantId: string, event: string, payload: NotifyPayload): Promise<void> {
+export async function notifyTenant(
+  tenantId: string,
+  event: string,
+  payload: NotifyPayload,
+  opts: NotifyOptions = {},
+): Promise<void> {
   const prisma = getPrisma();
   try {
     // Phase 1 (atomic): decide recipients by policy, write the in-app rows, and
     // collect those users' push subscriptions — all under RLS bypass.
     const subs = await prisma.$transaction(async (tx): Promise<PushSub[]> => {
-      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
       const [members, prefs] = await Promise.all([
         tx.membership.findMany({ where: { tenantId, status: 'ACTIVE' }, select: { userId: true } }),
         tx.notificationPref.findMany({ where: { tenantId } }),
@@ -57,8 +74,9 @@ export async function notifyTenant(tenantId: string, event: string, payload: Not
       const prefByUser = new Map(prefs.map((p) => [p.userId, p]));
 
       const notified = members.filter((m) => {
+        if (opts.ignorePolicy) return true;
         const pref = prefByUser.get(m.userId);
-        const events = pref?.events ?? DEFAULT_EVENTS;
+        const events = pref ? jsonArray(pref.events) : DEFAULT_EVENTS;
         if (!events.includes(event)) return false;
         if (pref && inQuietHours(pref.quietStart, pref.quietEnd, pref.quietTz)) return false;
         return true;
@@ -70,7 +88,7 @@ export async function notifyTenant(tenantId: string, event: string, payload: Not
           tenantId,
           userId: m.userId,
           type: event,
-          severity: SEVERITY[event] ?? 'WARNING',
+          severity: opts.severity ?? SEVERITY[event] ?? 'WARNING',
           title: payload.title,
           body: payload.body ?? null,
           jobId: payload.jobId ?? null,

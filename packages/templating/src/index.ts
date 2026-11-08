@@ -5,13 +5,23 @@
 // per-channel defaults and a sample context all live here so the editor and the
 // renderer never drift.
 
-export type TemplateChannel = 'INAPP' | 'EMAIL' | 'SLACK' | 'WEBHOOK';
-export type TemplateEvent = 'job.failed' | 'job.timeout' | 'job.dead_letter' | 'heartbeat.missed';
+export type TemplateChannel = 'INAPP' | 'EMAIL' | 'SLACK' | 'WEBHOOK' | 'TELEGRAM';
+export type TemplateEvent =
+  | 'job.failed'
+  | 'job.timeout'
+  | 'job.dead_letter'
+  | 'job.warning'
+  | 'job.success'
+  | 'job.missed'
+  | 'heartbeat.missed';
 
 export const TEMPLATE_EVENTS: { key: TemplateEvent; label: string; severity: string }[] = [
   { key: 'job.failed', label: 'Job failed', severity: 'CRITICAL' },
   { key: 'job.timeout', label: 'Job timed out', severity: 'CRITICAL' },
   { key: 'job.dead_letter', label: 'Job dead-lettered', severity: 'CRITICAL' },
+  { key: 'job.warning', label: 'Job finished with a warning', severity: 'WARNING' },
+  { key: 'job.success', label: 'Job succeeded', severity: 'INFO' },
+  { key: 'job.missed', label: 'Scheduled run missed', severity: 'WARNING' },
   { key: 'heartbeat.missed', label: 'Heartbeat missed', severity: 'WARNING' },
 ];
 
@@ -20,13 +30,14 @@ export const TEMPLATE_CHANNELS: { key: TemplateChannel; label: string; hasSubjec
   { key: 'EMAIL', label: 'Email', hasSubject: true, json: false, note: 'Subject is the email subject line; body is the plain-text message.' },
   { key: 'SLACK', label: 'Slack', hasSubject: false, json: false, note: 'Body is the text posted to the Slack channel.' },
   { key: 'WEBHOOK', label: 'Webhook', hasSubject: false, json: true, note: 'Body is a JSON template; variables are JSON-escaped. Must be valid JSON once rendered.' },
+  { key: 'TELEGRAM', label: 'Telegram', hasSubject: false, json: false, note: 'Body is the text sent to the Telegram chat.' },
 ];
 
 export interface TemplateVariable {
   key: string;
   label: string;
   /** Which events this variable is meaningful for ('all' = every event). */
-  scope: 'all' | 'failure' | 'heartbeat';
+  scope: 'all' | 'failure' | 'heartbeat' | 'schedule';
   sample: string;
 }
 
@@ -48,6 +59,9 @@ export const TEMPLATE_VARIABLES: TemplateVariable[] = [
   { key: 'consecutive', label: 'Consecutive failures', scope: 'failure', sample: '3' },
   { key: 'heartbeat.overdueSec', label: 'Overdue seconds', scope: 'heartbeat', sample: '360' },
   { key: 'heartbeat.lastPingAt', label: 'Last ping (ISO)', scope: 'heartbeat', sample: '2026-01-15T02:54:00.000Z' },
+  { key: 'schedule.expectedAt', label: 'Expected at (ISO)', scope: 'schedule', sample: '2026-01-15T03:00:00.000Z' },
+  { key: 'schedule.overdueSec', label: 'Overdue seconds', scope: 'schedule', sample: '420' },
+  { key: 'schedule.cronExpr', label: 'Cron expression', scope: 'schedule', sample: '0 3 * * *' },
 ];
 
 export interface TemplateFields {
@@ -75,6 +89,9 @@ for (const ev of ['job.failed', 'job.timeout', 'job.dead_letter'] as TemplateEve
   def(ev, 'SLACK', {
     body: '🔴 CronApp: job "{{ job.name }}" {{ run.status }} ({{ consecutive }} consecutive) — run {{ run.id }}',
   });
+  def(ev, 'TELEGRAM', {
+    body: '🔴 CronApp\nJob "{{ job.name }}" {{ run.status }} ({{ consecutive }} consecutive)\nRun: {{ run.id }}\nError: {{ run.error || "—" }}',
+  });
   def(ev, 'WEBHOOK', {
     body: '{\n  "event": "{{ event }}",\n  "job": "{{ job.name }}",\n  "jobId": "{{ job.id }}",\n  "runId": "{{ run.id }}",\n  "status": "{{ run.status }}",\n  "consecutive": {{ consecutive }}\n}',
   });
@@ -91,8 +108,69 @@ def('heartbeat.missed', 'EMAIL', {
 def('heartbeat.missed', 'SLACK', {
   body: '🟠 CronApp: job "{{ job.name }}" missed its heartbeat — no ping or successful run in over {{ heartbeat.overdueSec }}s',
 });
+def('heartbeat.missed', 'TELEGRAM', {
+  body: '🟠 CronApp\nJob "{{ job.name }}" missed its heartbeat — no ping or successful run in over {{ heartbeat.overdueSec }}s',
+});
 def('heartbeat.missed', 'WEBHOOK', {
   body: '{\n  "event": "heartbeat.missed",\n  "job": "{{ job.name }}",\n  "jobId": "{{ job.id }}",\n  "overdueSec": {{ heartbeat.overdueSec }}\n}',
+});
+
+// job.missed — a scheduled run that never fired on time (scheduler downtime or a
+// stuck lock); detected by the worker's missed-schedule monitor, not a run.
+def('job.missed', 'INAPP', {
+  subject: 'Job "{{ job.name }}" missed its schedule',
+  body: 'Expected at {{ schedule.expectedAt }}; overdue by {{ schedule.overdueSec }}s.',
+});
+def('job.missed', 'EMAIL', {
+  subject: '🟠 {{ job.name }} missed its schedule',
+  body: 'Job "{{ job.name }}" did not run on its schedule {{ schedule.cronExpr }}.\n\nExpected at: {{ schedule.expectedAt }}\nOverdue by: {{ schedule.overdueSec }}s\nRunbook: {{ job.runbookUrl || "—" }}\n\n— {{ tenant.name }} · CronApp',
+});
+def('job.missed', 'SLACK', {
+  body: '🟠 CronApp: job "{{ job.name }}" missed its schedule — expected {{ schedule.expectedAt }}, overdue by {{ schedule.overdueSec }}s',
+});
+def('job.missed', 'TELEGRAM', {
+  body: '🟠 CronApp\nJob "{{ job.name }}" missed its schedule\nExpected: {{ schedule.expectedAt }}\nOverdue: {{ schedule.overdueSec }}s',
+});
+def('job.missed', 'WEBHOOK', {
+  body: '{\n  "event": "job.missed",\n  "job": "{{ job.name }}",\n  "jobId": "{{ job.id }}",\n  "expectedAt": "{{ schedule.expectedAt }}",\n  "overdueSec": {{ schedule.overdueSec }}\n}',
+});
+
+// job.warning — a run that completed but reported a soft problem (result.warning).
+def('job.warning', 'INAPP', {
+  subject: 'Job "{{ job.name }}" finished with a warning',
+  body: '{{ run.error || "Run completed with a warning." }}',
+});
+def('job.warning', 'EMAIL', {
+  subject: '🟡 {{ job.name }} finished with a warning',
+  body: 'Job "{{ job.name }}" completed, but reported a warning.\n\nRun: {{ run.id }}\nWarning: {{ run.error || "—" }}\n\n— {{ tenant.name }} · CronApp',
+});
+def('job.warning', 'SLACK', {
+  body: '🟡 CronApp: job "{{ job.name }}" finished with a warning — {{ run.error || "—" }} (run {{ run.id }})',
+});
+def('job.warning', 'TELEGRAM', {
+  body: '🟡 CronApp\nJob "{{ job.name }}" finished with a warning\nRun: {{ run.id }}\nWarning: {{ run.error || "—" }}',
+});
+def('job.warning', 'WEBHOOK', {
+  body: '{\n  "event": "job.warning",\n  "job": "{{ job.name }}",\n  "jobId": "{{ job.id }}",\n  "runId": "{{ run.id }}",\n  "status": "{{ run.status }}",\n  "warning": "{{ run.error || "" }}"\n}',
+});
+
+// job.success — a clean successful run (use a threshold to avoid per-run noise).
+def('job.success', 'INAPP', {
+  subject: 'Job "{{ job.name }}" succeeded',
+  body: 'Run {{ run.id }} completed successfully.',
+});
+def('job.success', 'EMAIL', {
+  subject: '✅ {{ job.name }} succeeded',
+  body: 'Job "{{ job.name }}" completed successfully.\n\nRun: {{ run.id }}\nDuration: {{ run.durationMs || "—" }}ms\n\n— {{ tenant.name }} · CronApp',
+});
+def('job.success', 'SLACK', {
+  body: '✅ CronApp: job "{{ job.name }}" succeeded — run {{ run.id }}',
+});
+def('job.success', 'TELEGRAM', {
+  body: '✅ CronApp\nJob "{{ job.name }}" succeeded\nRun: {{ run.id }}',
+});
+def('job.success', 'WEBHOOK', {
+  body: '{\n  "event": "job.success",\n  "job": "{{ job.name }}",\n  "jobId": "{{ job.id }}",\n  "runId": "{{ run.id }}",\n  "status": "{{ run.status }}"\n}',
 });
 
 export function defaultTemplate(event: string, channel: string): TemplateFields | null {
@@ -109,6 +187,7 @@ export interface TemplateContext {
   consecutive?: number;
   tenant?: { name?: string };
   heartbeat?: { overdueSec?: number; lastPingAt?: string | null };
+  schedule?: { expectedAt?: string | null; overdueSec?: number; cronExpr?: string };
   time?: string;
 }
 
@@ -170,9 +249,28 @@ export function sampleContext(event: string): TemplateContext {
   };
   if (event === 'heartbeat.missed') {
     base.heartbeat = { overdueSec: 360, lastPingAt: '2026-01-15T02:54:00.000Z' };
+  } else if (event === 'job.missed') {
+    base.schedule = { expectedAt: '2026-01-15T03:00:00.000Z', overdueSec: 420, cronExpr: '0 3 * * *' };
   } else {
-    base.run = { id: 'run_def456', status: event === 'job.timeout' ? 'TIMEOUT' : event === 'job.dead_letter' ? 'DEAD_LETTER' : 'FAILED', error: 'connect ECONNREFUSED 10.0.0.5:443', attempt: 3, durationMs: 1200 };
-    base.consecutive = 3;
+    const status =
+      event === 'job.timeout' ? 'TIMEOUT'
+      : event === 'job.dead_letter' ? 'DEAD_LETTER'
+      : event === 'job.warning' ? 'WARNING'
+      : event === 'job.success' ? 'SUCCESS'
+      : 'FAILED';
+    const ok = event === 'job.success';
+    base.run = {
+      id: 'run_def456',
+      status,
+      error: ok
+        ? null
+        : event === 'job.warning'
+          ? 'Completed, but 2 records were skipped'
+          : 'connect ECONNREFUSED 10.0.0.5:443',
+      attempt: ok ? 1 : 3,
+      durationMs: 1200,
+    };
+    base.consecutive = ok ? 1 : 3;
   }
   return base;
 }

@@ -20,9 +20,4 @@ export const env = {
   },
   // Password-reset token lifetime (seconds). Default 30 minutes.
   resetTtlSec: parseInt(process.env.PASSWORD_RESET_TTL ?? '1800', 10),
-  redis: {
-    host: process.env.REDIS_HOST ?? '127.0.0.1',
-    port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
-    password: process.env.REDIS_PASSWORD || undefined,
-  },
 };

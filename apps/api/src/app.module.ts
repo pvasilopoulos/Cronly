@@ -26,6 +26,8 @@ import { BillingModule } from './billing/billing.module';
 import { SmtpModule } from './smtp/smtp.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { TemplatesModule } from './templates/templates.module';
+import { MaintenanceModule } from './maintenance/maintenance.module';
+import { SettingsModule } from './settings/settings.module';
 import { RateLimitGuard } from './common/rate-limit.guard';
 
 @Module({
@@ -54,6 +56,8 @@ import { RateLimitGuard } from './common/rate-limit.guard';
     SmtpModule,
     NotificationsModule,
     TemplatesModule,
+    MaintenanceModule,
+    SettingsModule,
   ],
   providers: [
     // Order matters: rate-limit first, then authenticate, then resolve

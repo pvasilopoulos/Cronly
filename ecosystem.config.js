@@ -33,11 +33,19 @@ function loadEnv(file) {
     if (eq === -1) continue;
     const key = line.slice(0, eq).trim();
     let val = line.slice(eq + 1).trim();
-    if (
-      (val.startsWith('"') && val.endsWith('"')) ||
-      (val.startsWith("'") && val.endsWith("'"))
-    ) {
-      val = val.slice(1, -1);
+    // Quoted value: take the content between the quotes and ignore anything
+    // after the closing quote (e.g. a trailing `# comment`). Unquoted value:
+    // strip an inline comment that starts after whitespace (` #`), matching
+    // how a shell sourcing the same .env treats these lines. Without this,
+    // a documented line like `JWT_REFRESH_TTL="2592000"  # 30 days` would make
+    // parseInt() see `"2592000"  # 30 days` → NaN at runtime.
+    const quote = val[0];
+    if (quote === '"' || quote === "'") {
+      const end = val.indexOf(quote, 1);
+      val = end === -1 ? val.slice(1) : val.slice(1, end);
+    } else {
+      const hash = val.indexOf(' #');
+      if (hash !== -1) val = val.slice(0, hash).trim();
     }
     out[key] = val;
   }

@@ -233,6 +233,26 @@ export class AuthService {
     return { ok: true };
   }
 
+  /**
+   * Change the password of the signed-in user. The current password is required
+   * so that a stolen access token alone cannot change it. Unlike a reset this is
+   * a deliberate, authenticated action, so the caller's own sessions are kept.
+   */
+  async changePassword(userId: string, currentPassword: string, newPassword: string) {
+    const user = await this.loadUser({ id: userId });
+    if (!user || user.status === 'DISABLED' || !verifyPassword(currentPassword, user.passwordHash)) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+    if (verifyPassword(newPassword, user.passwordHash)) {
+      throw new BadRequestException('New password must be different from the current one');
+    }
+    await this.prisma.asSuperAdmin((tx) =>
+      tx.user.update({ where: { id: userId }, data: { passwordHash: hashPassword(newPassword) } }),
+    );
+    await this.auditAllTenants(userId, 'user.password.changed', {});
+    return { ok: true };
+  }
+
   // ─────────────────────────── 2FA ───────────────────────────
 
   async twoFactorStatus(userId: string) {

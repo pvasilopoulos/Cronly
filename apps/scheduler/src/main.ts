@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { Queue } from 'bullmq';
 import { getPrisma, Prisma } from '@cronapp/database';
 import { nextRun } from '@cronapp/cron';
 import { reapOnce, purgeOnce } from './reaper';
 import { logJson } from './logger';
 
-// The scheduler is a trusted backend process that must see all tenants, so it
-// runs with RLS bypassed. It NEVER executes jobs itself — it only claims the
-// due ones (atomically, via SKIP LOCKED) and pushes them to the queue.
+// The scheduler is a trusted backend process that must see all tenants. It NEVER
+// executes jobs itself — it only claims the due ones (atomically, via FOR UPDATE
+// SKIP LOCKED) and commits a QUEUED JobRun for each. That row IS the work queue:
+// the workers poll for QUEUED runs, so there is no Redis/broker — MariaDB is the
+// single source of truth.
 
 const INSTANCE = `sched-${process.pid}-${randomUUID().slice(0, 8)}`;
 const TICK_MS = parseInt(process.env.SCHEDULER_TICK_MS ?? '15000', 10);
@@ -15,66 +16,139 @@ const REAPER_MS = parseInt(process.env.REAPER_INTERVAL_MS ?? '60000', 10);
 const PURGE_MS = parseInt(process.env.PURGE_INTERVAL_MS ?? '3600000', 10);
 const BATCH = 200;
 
-const queue = new Queue('executions', {
-  connection: {
-    host: process.env.REDIS_HOST ?? '127.0.0.1',
-    port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
-    password: process.env.REDIS_PASSWORD || undefined,
-  },
-});
-
 interface ClaimedJob {
   id: string;
   tenantId: string;
   cronExpr: string;
   timezone: string;
-  concurrencyKey: string | null;
+  overlapPolicy: string;
+}
+
+interface SuppressedJob extends ClaimedJob {
+  windowEnd: Date;
+}
+
+// Advance (without running) every due job whose tenant is currently inside a
+// maintenance window. We fast-forward nextRunAt to the first occurrence AFTER
+// the window closes, so maintenance both skips runs and prevents a backlog
+// stampede when it ends.
+async function fastForwardSuppressed(prisma: ReturnType<typeof getPrisma>): Promise<void> {
+  const rows = await prisma.$queryRaw<SuppressedJob[]>(Prisma.sql`
+    SELECT j.id, j.tenantId, j.cronExpr, j.timezone, MAX(mw.endsAt) AS windowEnd
+    FROM Job j
+    JOIN MaintenanceWindow mw
+      ON mw.tenantId = j.tenantId
+     AND mw.startsAt <= UTC_TIMESTAMP()
+     AND mw.endsAt >= UTC_TIMESTAMP()
+    WHERE j.enabled = true
+      AND j.status = 'ACTIVE'
+      AND j.nextRunAt IS NOT NULL
+      AND j.nextRunAt <= UTC_TIMESTAMP()
+    GROUP BY j.id, j.tenantId, j.cronExpr, j.timezone
+    LIMIT ${BATCH}
+  `);
+  for (const job of rows) {
+    try {
+      const next = nextRun(job.cronExpr, job.timezone, new Date(job.windowEnd));
+      await prisma.job.update({ where: { id: job.id }, data: { nextRunAt: next } });
+    } catch (err) {
+      console.error(`[${INSTANCE}] fast-forward failed for ${job.id}`, err);
+    }
+  }
+  if (rows.length > 0) {
+    logJson({ level: 'info', msg: 'maintenance_skip', instance: INSTANCE, skipped: rows.length });
+  }
 }
 
 async function tick() {
   const prisma = getPrisma();
   try {
+    // Atomically grab a batch of due jobs; other scheduler instances skip the
+    // rows this transaction has locked (SKIP LOCKED). MariaDB has no
+    // UPDATE ... RETURNING, so we SELECT ... FOR UPDATE then stamp the claim in
+    // the same transaction. All time math uses UTC_TIMESTAMP(): Prisma stores
+    // DateTimes as UTC, so comparing against UTC keeps schedules correct
+    // regardless of the server's OS timezone.
+    // Before claiming, fast-forward any due job whose tenant is inside an active
+    // maintenance window. Advancing nextRunAt to the next slot means the run is
+    // skipped (not queued) and, crucially, nothing piles up to fire in a burst
+    // the moment the window closes.
+    await fastForwardSuppressed(prisma);
+
     const claimed = await prisma.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-      // Atomically grab a batch of due jobs; other scheduler instances skip
-      // rows this transaction has locked.
-      return tx.$queryRaw<ClaimedJob[]>(Prisma.sql`
-        UPDATE "Job" AS j
-        SET "lockedAt" = now(), "lockedBy" = ${INSTANCE}
-        WHERE j.id IN (
-          SELECT id FROM "Job"
-          WHERE enabled = true
-            AND status = 'ACTIVE'
-            AND "nextRunAt" IS NOT NULL
-            AND "nextRunAt" <= now()
-            -- Respect an optional schedule window: never fire before it opens or
-            -- after it closes, even while the job stays ACTIVE.
-            AND ("startsAt" IS NULL OR "startsAt" <= now())
-            AND ("endsAt" IS NULL OR "endsAt" >= now())
-            AND ("lockedAt" IS NULL OR "lockedAt" < now() - interval '5 minutes')
-          ORDER BY "nextRunAt" ASC
-          LIMIT ${BATCH}
-          FOR UPDATE SKIP LOCKED
-        )
-        RETURNING j.id, j."tenantId", j."cronExpr", j.timezone, j."concurrencyKey";
+      const rows = await tx.$queryRaw<ClaimedJob[]>(Prisma.sql`
+        SELECT id, tenantId, cronExpr, timezone, overlapPolicy
+        FROM Job j
+        WHERE enabled = true
+          AND status = 'ACTIVE'
+          AND nextRunAt IS NOT NULL
+          AND nextRunAt <= UTC_TIMESTAMP()
+          -- Respect an optional schedule window: never fire before it opens or
+          -- after it closes, even while the job stays ACTIVE.
+          AND (startsAt IS NULL OR startsAt <= UTC_TIMESTAMP())
+          AND (endsAt IS NULL OR endsAt >= UTC_TIMESTAMP())
+          -- Never claim while the tenant is in a maintenance window.
+          AND NOT EXISTS (
+            SELECT 1 FROM MaintenanceWindow mw
+            WHERE mw.tenantId = j.tenantId
+              AND mw.startsAt <= UTC_TIMESTAMP()
+              AND mw.endsAt >= UTC_TIMESTAMP()
+          )
+          AND (lockedAt IS NULL OR lockedAt < UTC_TIMESTAMP() - INTERVAL 5 MINUTE)
+        ORDER BY nextRunAt ASC
+        LIMIT ${BATCH}
+        FOR UPDATE SKIP LOCKED
       `);
+      if (rows.length > 0) {
+        await tx.$executeRaw(Prisma.sql`
+          UPDATE Job SET lockedAt = UTC_TIMESTAMP(), lockedBy = ${INSTANCE}
+          WHERE id IN (${Prisma.join(rows.map((r) => r.id))})
+        `);
+      }
+      return rows;
     });
 
     if (claimed.length === 0) return;
 
     for (const job of claimed) {
       const scheduledAt = new Date();
-      // 1) Durably commit the run + advance the schedule FIRST. The enqueue is
-      //    deliberately kept OUT of this transaction: Redis latency must never
-      //    be able to expire the DB transaction (a 5s interactive-tx timeout).
-      //    Otherwise a slow/unavailable Redis rolls back the JobRun while the
-      //    enqueue still lands, poisoning the queue with a runId that has no row.
-      const run = await prisma.$transaction(async (tx) => {
-        await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-        const created = await tx.jobRun.create({
+      // Commit the QUEUED run AND advance the schedule in one transaction. The
+      // run row is the queue entry — a worker picks it up on its next poll.
+      await prisma.$transaction(async (tx) => {
+        // Overlap policy: when a previous run of this job is still active, SKIP
+        // drops this occurrence and QUEUE keeps at most one run waiting behind
+        // the running one (so slow jobs don't pile up). The schedule still
+        // advances, so the job keeps its cadence. (QUEUE's actual no-overlap
+        // guarantee is enforced at claim time in the worker.)
+        if (job.overlapPolicy !== 'ALLOW') {
+          const [running, queued] = await Promise.all([
+            tx.jobRun.count({ where: { jobId: job.id, status: 'RUNNING' } }),
+            tx.jobRun.count({ where: { jobId: job.id, status: 'QUEUED' } }),
+          ]);
+          const suppress = job.overlapPolicy === 'SKIP' ? running + queued > 0 : queued > 0;
+          if (suppress) {
+            await tx.job.update({
+              where: { id: job.id },
+              data: {
+                nextRunAt: nextRun(job.cronExpr, job.timezone),
+                lockedAt: null,
+                lockedBy: null,
+                missedAlertedAt: null,
+              },
+            });
+            logJson({
+              level: 'info',
+              msg: 'overlap_suppressed',
+              instance: INSTANCE,
+              jobId: job.id,
+              policy: job.overlapPolicy,
+            });
+            return;
+          }
+        }
+        await tx.jobRun.create({
           data: { jobId: job.id, tenantId: job.tenantId, status: 'QUEUED', scheduledAt },
         });
-        // Advance the schedule and release the claim.
         await tx.job.update({
           where: { id: job.id },
           data: {
@@ -82,27 +156,12 @@ async function tick() {
             nextRunAt: nextRun(job.cronExpr, job.timezone),
             lockedAt: null,
             lockedBy: null,
+            // The job fired: clear any missed-schedule flag so a later lapse
+            // re-alerts.
+            missedAlertedAt: null,
           },
         });
-        return created;
       });
-
-      // 2) Enqueue AFTER commit. If this throws, the run stays persisted as
-      //    QUEUED and can be recovered — far better than a poisoned queue.
-      try {
-        await queue.add(
-          'execute',
-          { runId: run.id, jobId: job.id, tenantId: job.tenantId, attempt: 1 },
-          {
-            jobId: run.id,
-            removeOnComplete: 1000,
-            removeOnFail: 5000,
-            ...(job.concurrencyKey ? { group: { id: `${job.tenantId}:${job.concurrencyKey}` } } : {}),
-          } as any,
-        );
-      } catch (err) {
-        console.error(`[${INSTANCE}] enqueue failed for run ${run.id} (left as QUEUED)`, err);
-      }
     }
     logJson({ level: 'info', msg: 'tick_claimed', instance: INSTANCE, claimed: claimed.length });
   } catch (err) {
@@ -112,7 +171,7 @@ async function tick() {
 
 async function reap() {
   try {
-    await reapOnce(queue, INSTANCE);
+    await reapOnce(INSTANCE);
   } catch (err) {
     console.error(`[${INSTANCE}] reaper error`, err);
   }
@@ -142,7 +201,6 @@ async function main() {
     clearInterval(timer);
     clearInterval(reaperTimer);
     clearInterval(purgeTimer);
-    await queue.close();
     await getPrisma().$disconnect();
     process.exit(0);
   };

@@ -1,8 +1,6 @@
-import { createHmac } from 'node:crypto';
-import { getPrisma } from '@cronapp/database';
-import type { TemplateContext } from '@cronapp/templating';
-import { safeFetch } from './net-guard';
-import { sendMail } from './mailer';
+import { getPrisma, jsonArray } from '@cronapp/database';
+import { renderFields, type TemplateChannel, type TemplateContext } from '@cronapp/templating';
+import { deliverToChannel } from '@cronapp/notify';
 import { notifyTenant } from './notifications';
 import { renderFromRows, type TemplateRow } from './templates';
 
@@ -12,18 +10,36 @@ import { renderFromRows, type TemplateRow } from './templates';
 // infrastructure.
 
 export type TerminalStatus = 'FAILED' | 'TIMEOUT' | 'DEAD_LETTER';
-const TERMINAL = new Set<string>(['FAILED', 'TIMEOUT', 'DEAD_LETTER']);
+/** Statuses an alert rule may fire on: terminal failures + completed outcomes. */
+export type AlertableStatus = TerminalStatus | 'WARNING' | 'SUCCESS';
+
+const FAILURE = new Set<string>(['FAILED', 'TIMEOUT', 'DEAD_LETTER']);
+const TRANSIENT = new Set<string>(['QUEUED', 'RUNNING']);
+
+const EVENT_FOR: Record<AlertableStatus, string> = {
+  FAILED: 'job.failed',
+  TIMEOUT: 'job.timeout',
+  DEAD_LETTER: 'job.dead_letter',
+  WARNING: 'job.warning',
+  SUCCESS: 'job.success',
+};
+const SEVERITY_FOR: Record<AlertableStatus, string> = {
+  FAILED: 'CRITICAL',
+  TIMEOUT: 'CRITICAL',
+  DEAD_LETTER: 'CRITICAL',
+  WARNING: 'WARNING',
+  SUCCESS: 'INFO',
+};
 
 export async function maybeAlert(
   tenantId: string,
   jobId: string,
   runId: string,
-  status: TerminalStatus,
+  status: AlertableStatus,
 ): Promise<void> {
   const prisma = getPrisma();
 
   const ctx = await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
     const job = await tx.job.findUnique({ where: { id: jobId } });
     const rules = await tx.alertRule.findMany({
       where: {
@@ -53,20 +69,30 @@ export async function maybeAlert(
 
   if (!ctx.job) return;
 
-  // Consecutive terminal failures counting back from the latest run.
-  let consecutive = 0;
-  for (const r of ctx.recent) {
-    if (TERMINAL.has(r.status)) consecutive++;
-    else break;
-  }
+  const event = EVENT_FOR[status];
+  const isFailure = FAILURE.has(status);
 
-  const event =
-    status === 'TIMEOUT' ? 'job.timeout' : status === 'DEAD_LETTER' ? 'job.dead_letter' : 'job.failed';
+  // Per-rule streak: the most-recent *completed* runs whose status the rule
+  // watches, counted back from the latest run (ignoring transient QUEUED/RUNNING
+  // rows). The current run is recent[0] — it was stamped just before this call —
+  // so a streak of N is this run plus N-1 like-statused runs right before it.
+  // This generalises the old "consecutive failures" count to any status set, so
+  // a SUCCESS rule with threshold 3 fires on three clean runs in a row, etc.
+  const streakFor = (onStatuses: Set<string>): number => {
+    let n = 0;
+    for (const r of ctx.recent) {
+      if (TRANSIENT.has(r.status)) continue;
+      if (onStatuses.has(r.status)) n++;
+      else break;
+    }
+    return n;
+  };
 
-  // One context drives every channel's template for this failure.
+  // One mutable context drives every channel's template for this event; the
+  // consecutive count is set per rule just before each delivery.
   const tctx: TemplateContext = {
     event,
-    severity: 'CRITICAL',
+    severity: SEVERITY_FOR[status],
     job: {
       name: ctx.job.name,
       id: ctx.job.id,
@@ -75,29 +101,51 @@ export async function maybeAlert(
       description: ctx.job.description,
     },
     run: { id: runId, status, error: ctx.run?.error, attempt: ctx.run?.attempt, durationMs: ctx.run?.durationMs },
-    consecutive,
+    consecutive: streakFor(FAILURE),
     tenant: { name: ctx.tenant?.name },
     time: new Date().toISOString(),
   };
 
   // In-app live notifications fan out per-user by policy, independent of the
   // tenant's channel alert rules — a member still sees a failure in their bell
-  // even when no Slack/email/webhook channel is configured. The INAPP template
-  // (override or default) supplies the title + body.
-  const inapp = renderFromRows(ctx.templates, event, 'INAPP', tctx);
-  await notifyTenant(tenantId, event, {
-    title: inapp.subject || `Job "${ctx.job.name}" ${status}`,
-    body: inapp.body,
-    jobId: ctx.job.id,
-    runId,
-  });
+  // even when no Slack/email/webhook channel is configured. Only failures fan
+  // out here; success/warning notifications would be too noisy per-run and are
+  // delivered solely through the explicit alert rules evaluated below.
+  if (isFailure) {
+    const inapp = renderFromRows(ctx.templates, event, 'INAPP', tctx);
+    await notifyTenant(tenantId, event, {
+      title: inapp.subject || `Job "${ctx.job.name}" ${status}`,
+      body: inapp.body,
+      jobId: ctx.job.id,
+      runId,
+    });
+  }
 
   if (ctx.rules.length === 0) return;
 
   for (const rule of ctx.rules) {
-    if (!rule.onStatuses.includes(status as never)) continue;
-    // Fire exactly when the streak crosses the threshold (avoids repeat spam).
-    if (consecutive !== rule.threshold) continue;
+    const onStatuses = new Set(jsonArray(rule.onStatuses).map(String));
+    if (!onStatuses.has(status as string)) continue;
+    const streak = streakFor(onStatuses);
+    // Failures fire ONCE, exactly when the streak reaches the threshold, so a
+    // persistent outage doesn't re-alert on every subsequent run. Success /
+    // warning are recurring notifications, so they fire on EVERY matching run
+    // once the streak is long enough — with threshold 1 that means "every time".
+    const fire = isFailure ? streak === rule.threshold : streak >= rule.threshold;
+    if (!fire) continue;
+    // Throttle / re-notify: when muteSec > 0, deliver at most once per muteSec
+    // for this rule. The claim is a single conditional UPDATE so that, even with
+    // several worker instances processing runs of the same job at once, exactly
+    // one delivery wins per window (the others see count 0 and skip).
+    if (rule.muteSec > 0) {
+      const cutoff = new Date(Date.now() - rule.muteSec * 1000);
+      const claim = await prisma.alertRule.updateMany({
+        where: { id: rule.id, OR: [{ lastFiredAt: null }, { lastFiredAt: { lt: cutoff } }] },
+        data: { lastFiredAt: new Date() },
+      });
+      if (claim.count === 0) continue; // still inside the mute window
+    }
+    tctx.consecutive = streak;
     await deliver(rule.channel, {
       tenantId,
       event,
@@ -106,7 +154,8 @@ export async function maybeAlert(
       job: ctx.job,
       runId,
       status,
-      consecutive,
+      consecutive: streak,
+      custom: rule.body ? { subject: rule.subject ?? null, body: rule.body } : null,
     }).catch((e) =>
       console.error(`[alert] delivery failed (channel ${rule.channelId}):`, e?.message ?? e),
     );
@@ -120,65 +169,23 @@ interface AlertEvent {
   tctx: TemplateContext;
   job: { id: string; name: string; runbookUrl?: string | null; description?: string | null };
   runId: string;
-  status: TerminalStatus;
+  status: AlertableStatus;
   consecutive: number;
+  /** Per-rule message override (AlertRule.subject/body); null → use templates. */
+  custom?: { subject: string | null; body: string } | null;
 }
 
 async function deliver(channel: any, ev: AlertEvent): Promise<void> {
-  // Render the per-channel template (override or default) for this failure and
-  // deliver it. The channel type (EMAIL/SLACK/WEBHOOK) maps 1:1 to a template
-  // channel key.
-  const rendered = renderFromRows(ev.templates, ev.event, channel.type, ev.tctx);
-  await deliverToChannel(channel, rendered);
-}
-
-/**
- * Deliver one already-rendered message to a notification channel. Shared by
- * run-failure alerts and heartbeat-miss alerts so both honour the same SSRF
- * guard and webhook signing. For SLACK/EMAIL `body` is the text; for WEBHOOK
- * `body` is the full JSON payload string (HMAC-signed with the channel's signing
- * secret when set). `subject` is the email subject line.
- */
-export async function deliverToChannel(
-  channel: any,
-  rendered: { subject: string | null; body: string },
-): Promise<void> {
-  if (channel.type === 'SLACK') {
-    await safeFetch(channel.target, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: rendered.body }),
-    });
-    return;
-  }
-
-  if (channel.type === 'WEBHOOK') {
-    // The webhook body is the tenant's own JSON template, rendered. Sign the
-    // exact bytes we send so a receiver can verify integrity.
-    const body = rendered.body;
-    const headers: Record<string, string> = { 'content-type': 'application/json' };
-    if (channel.signingSecret) {
-      headers['x-cronapp-signature'] =
-        'sha256=' + createHmac('sha256', channel.signingSecret).update(body).digest('hex');
-    }
-    await safeFetch(channel.target, { method: 'POST', headers, body });
-    return;
-  }
-
-  if (channel.type === 'EMAIL') {
-    // Deliver through the shared SMTP transport. Without SMTP_HOST configured
-    // this is a dry-run (composed, logged, not sent) so alerting still works
-    // end-to-end in dev without a mail server.
-    const res = await sendMail({
-      to: channel.target,
-      subject: rendered.subject || 'CronApp alert',
-      text: rendered.body,
-    });
-    console.log(
-      res.mode === 'sent'
-        ? `[alert:email→${channel.target}] sent (${res.messageId})`
-        : `[alert:email→${channel.target}] dry-run (no SMTP configured): ${rendered.body}`,
-    );
-    return;
-  }
+  // A rule may carry its own message (per-job custom text). When it does, render
+  // that with the same engine as the shared templates (JSON-escaped for WEBHOOK);
+  // otherwise fall back to the tenant override or the built-in default copy. The
+  // channel type maps 1:1 to a template channel key.
+  const rendered = ev.custom
+    ? renderFields(
+        { subject: ev.custom.subject, body: ev.custom.body },
+        ev.tctx,
+        channel.type as TemplateChannel,
+      )
+    : renderFromRows(ev.templates, ev.event, channel.type, ev.tctx);
+  await deliverToChannel(channel, { subject: rendered.subject ?? null, body: rendered.body });
 }

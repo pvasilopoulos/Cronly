@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { jsonArray } from '@cronapp/database';
 import { PrismaService } from '../prisma/prisma.service';
 
 /** The single AppConfig row id — there is only ever one. */
@@ -53,7 +54,7 @@ export class AppConfigService {
       logo: row?.logo ?? null,
       logoScale: row?.logoScale ?? DEFAULT_LOGO_SCALE,
       favicon: row?.favicon ?? null,
-      mobileNav: row?.mobileNav ?? [],
+      mobileNav: jsonArray(row?.mobileNav),
     };
   }
 
@@ -87,7 +88,7 @@ export class AppConfigService {
       logo: row.logo ?? null,
       logoScale: row.logoScale ?? DEFAULT_LOGO_SCALE,
       favicon: row.favicon ?? null,
-      mobileNav: row.mobileNav ?? [],
+      mobileNav: jsonArray(row.mobileNav),
     };
   }
 

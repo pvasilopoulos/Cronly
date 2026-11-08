@@ -7,8 +7,18 @@ import type { AlertRule, AlertStatus, ChannelType, Job, NotificationChannel } fr
 import { Spinner, EmptyState } from '@/components/ui';
 import { SearchableSelect } from '@/components/SearchableSelect';
 
-const CHANNEL_TYPES: ChannelType[] = ['EMAIL', 'SLACK', 'WEBHOOK'];
-const ALERT_STATUSES: AlertStatus[] = ['FAILED', 'TIMEOUT', 'DEAD_LETTER'];
+const CHANNEL_TYPES: ChannelType[] = ['EMAIL', 'SLACK', 'WEBHOOK', 'TELEGRAM'];
+const ALERT_STATUSES: AlertStatus[] = ['FAILED', 'TIMEOUT', 'DEAD_LETTER', 'WARNING', 'SUCCESS'];
+// New rules preselect the failure statuses only; WARNING/SUCCESS are opt-in to
+// avoid turning every clean run into an alert.
+const DEFAULT_RULE_STATUSES: AlertStatus[] = ['FAILED', 'TIMEOUT', 'DEAD_LETTER'];
+const STATUS_TONE: Record<AlertStatus, string> = {
+  FAILED: 'bg-err/15 text-err',
+  TIMEOUT: 'bg-err/15 text-err',
+  DEAD_LETTER: 'bg-err/15 text-err',
+  WARNING: 'bg-warn/15 text-warn',
+  SUCCESS: 'bg-ok/15 text-ok',
+};
 
 const TYPE_META: Record<ChannelType, { icon: string; label: string; placeholder: string; hint: string }> = {
   EMAIL: { icon: '✉', label: 'Email', placeholder: 'ops@example.com', hint: 'Destination email address.' },
@@ -23,6 +33,12 @@ const TYPE_META: Record<ChannelType, { icon: string; label: string; placeholder:
     label: 'Webhook',
     placeholder: 'https://example.com/hooks/cron',
     hint: 'A JSON POST is sent here on each alert.',
+  },
+  TELEGRAM: {
+    icon: '✈',
+    label: 'Telegram',
+    placeholder: '-1001234567890',
+    hint: 'The chat ID to post to (use @userinfobot or getUpdates to find it).',
   },
 };
 
@@ -143,7 +159,7 @@ export default function AlertsPage() {
                   {r.onStatuses.map((s) => (
                     <span
                       key={s}
-                      className="rounded-full bg-err/15 px-2 py-0.5 text-[11px] font-semibold text-err"
+                      className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${STATUS_TONE[s] ?? 'bg-err/15 text-err'}`}
                     >
                       {s.replace('_', ' ').toLowerCase()}
                     </span>
@@ -152,6 +168,11 @@ export default function AlertsPage() {
                 <span className="text-xs text-muted">
                   after <b className="text-fg">{r.threshold}</b> in a row
                 </span>
+                {r.muteSec > 0 && (
+                  <span className="text-xs text-muted">
+                    · mutes <b className="text-fg">{Math.round(r.muteSec / 60)}m</b>
+                  </span>
+                )}
                 {!r.enabled && (
                   <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
                     disabled
@@ -249,7 +270,8 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
           type,
           name,
           target,
-          ...(type === 'WEBHOOK' && signingSecret ? { signingSecret } : {}),
+          // WEBHOOK: optional HMAC secret. TELEGRAM: the bot token (required).
+          ...((type === 'WEBHOOK' || type === 'TELEGRAM') && signingSecret ? { signingSecret } : {}),
         },
       });
       globalMutate('/alerts/channels');
@@ -273,7 +295,7 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
           </button>
           <button
             onClick={save}
-            disabled={busy || !name || !target}
+            disabled={busy || !name || !target || (type === 'TELEGRAM' && !signingSecret)}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white hover:brightness-110 disabled:opacity-60"
           >
             {busy ? 'Saving…' : 'Create'}
@@ -284,7 +306,7 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
       <div className="flex flex-col gap-4">
         <div>
           <span className={labelCls}>Type</span>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {CHANNEL_TYPES.map((t) => (
               <button
                 key={t}
@@ -304,7 +326,9 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ops team" className={inputCls} />
         </div>
         <div>
-          <label className={labelCls}>{type === 'EMAIL' ? 'Address' : 'URL'}</label>
+          <label className={labelCls}>
+            {type === 'EMAIL' ? 'Address' : type === 'TELEGRAM' ? 'Chat ID' : 'URL'}
+          </label>
           <input
             value={target}
             onChange={(e) => setTarget(e.target.value)}
@@ -327,6 +351,21 @@ function ChannelEditor({ onClose }: { onClose: () => void }) {
             </p>
           </div>
         )}
+        {type === 'TELEGRAM' && (
+          <div>
+            <label className={labelCls}>Bot token</label>
+            <input
+              value={signingSecret}
+              onChange={(e) => setSigningSecret(e.target.value)}
+              placeholder="123456:ABC-DEF…"
+              className={`${inputCls} font-mono`}
+            />
+            <p className="mt-1 text-xs text-faint">
+              From <code className="font-mono">@BotFather</code> when you create the bot. Stored write-only; add the
+              bot to your chat first.
+            </p>
+          </div>
+        )}
       </div>
     </Modal>
   );
@@ -344,7 +383,8 @@ function RuleEditor({
   const [channelId, setChannelId] = useState(channels[0]?.id ?? '');
   const [jobId, setJobId] = useState<string>(''); // '' → all jobs
   const [threshold, setThreshold] = useState(1);
-  const [statuses, setStatuses] = useState<Set<AlertStatus>>(new Set(ALERT_STATUSES));
+  const [muteMin, setMuteMin] = useState(0);
+  const [statuses, setStatuses] = useState<Set<AlertStatus>>(new Set(DEFAULT_RULE_STATUSES));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -366,6 +406,7 @@ function RuleEditor({
           channelId,
           ...(jobId ? { jobId } : {}),
           threshold,
+          muteSec: Math.max(0, Math.round(muteMin)) * 60,
           onStatuses: [...statuses],
         },
       });
@@ -428,7 +469,7 @@ function RuleEditor({
                 key={s}
                 onClick={() => toggleStatus(s)}
                 className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                  statuses.has(s) ? 'bg-err/15 text-err' : 'border border-line text-faint hover:border-faint'
+                  statuses.has(s) ? STATUS_TONE[s] : 'border border-line text-faint hover:border-faint'
                 }`}
               >
                 {s.replace('_', ' ').toLowerCase()}
@@ -448,6 +489,22 @@ function RuleEditor({
               className={`${inputCls} w-24`}
             />
             <span className="text-sm text-muted">consecutive failure(s) before alerting</span>
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Don’t re-alert for</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={0}
+              max={43200}
+              value={muteMin}
+              onChange={(e) => setMuteMin(Math.max(0, Math.min(43200, Number(e.target.value) || 0)))}
+              className={`${inputCls} w-24`}
+            />
+            <span className="text-sm text-muted">
+              minutes (0 = every matching run); re-alerts once this long passes while it persists
+            </span>
           </div>
         </div>
       </div>

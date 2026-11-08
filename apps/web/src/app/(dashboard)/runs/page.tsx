@@ -31,6 +31,32 @@ export default function RunsPage() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [openRun, setOpenRun] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
+
+  async function exportRuns(format: 'csv' | 'json') {
+    setExporting(format);
+    setNote(null);
+    try {
+      const params = new URLSearchParams({ format });
+      if (filter) params.set('status', filter);
+      if (jobFilter) params.set('jobId', jobFilter);
+      const res = await api<Response>(`/runs/export?${params.toString()}`, { raw: true });
+      if (!res.ok) throw new Error(`Export failed (${res.status})`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `cronapp-runs-${new Date().toISOString().slice(0, 10)}.${format}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err: any) {
+      setNote(`Export failed: ${String(err?.message ?? err)}`);
+    } finally {
+      setExporting(null);
+    }
+  }
 
   const key = filter ? `/runs?limit=100&status=${encodeURIComponent(filter)}` : '/runs?limit=100';
   const { data: runs, isLoading, mutate } = useSWR<Run[]>(key, () => fetcher<Run[]>(key));
@@ -124,9 +150,30 @@ export default function RunsPage() {
 
   return (
     <div className="mx-auto max-w-5xl">
-      <header className="mb-5">
-        <h1 className="text-xl font-bold md:text-2xl">Executions</h1>
-        <p className="text-sm text-muted">Recent runs across all jobs — filter failures and replay them</p>
+      <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold md:text-2xl">Executions</h1>
+          <p className="text-sm text-muted">Recent runs across all jobs — filter failures and replay them</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-faint">Export</span>
+          <button
+            onClick={() => exportRuns('csv')}
+            disabled={!!exporting || all.length === 0}
+            className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium hover:border-faint disabled:opacity-60"
+            title="Download the current view as CSV"
+          >
+            {exporting === 'csv' ? '…' : 'CSV'}
+          </button>
+          <button
+            onClick={() => exportRuns('json')}
+            disabled={!!exporting || all.length === 0}
+            className="rounded-lg border border-line px-3 py-1.5 text-xs font-medium hover:border-faint disabled:opacity-60"
+            title="Download the current view as JSON"
+          >
+            {exporting === 'json' ? '…' : 'JSON'}
+          </button>
+        </div>
       </header>
 
       {/* KPI summary over the current status window */}

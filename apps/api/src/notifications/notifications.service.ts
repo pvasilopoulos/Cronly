@@ -1,19 +1,30 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { jsonArray } from '@cronapp/database';
 import { PrismaService } from '../prisma/prisma.service';
 import { PrincipalService } from '../rbac/principal.service';
 import type { AuthUser } from '../auth/jwt.strategy';
 import type { UpdatePrefsDto } from './notifications.dto';
 
-/** The catalog of notifiable events (also used by the policy UI). */
+/**
+ * The catalog of notifiable events (also used by the policy UI). `default` marks
+ * the events a user gets without an explicit policy; the response-status events
+ * are opt-in (default off) so enabling the app never floods anyone with a
+ * notification on every HTTP run.
+ */
 export const NOTIFICATION_EVENTS = [
-  { key: 'job.failed', label: 'Job failed', severity: 'CRITICAL' },
-  { key: 'job.timeout', label: 'Job timed out', severity: 'CRITICAL' },
-  { key: 'job.dead_letter', label: 'Job dead-lettered', severity: 'CRITICAL' },
-  { key: 'heartbeat.missed', label: 'Heartbeat missed', severity: 'WARNING' },
+  { key: 'job.failed', label: 'Job failed', severity: 'CRITICAL', default: true },
+  { key: 'job.timeout', label: 'Job timed out', severity: 'CRITICAL', default: true },
+  { key: 'job.dead_letter', label: 'Job dead-lettered', severity: 'CRITICAL', default: true },
+  { key: 'job.missed', label: 'Scheduled run missed', severity: 'WARNING', default: true },
+  { key: 'heartbeat.missed', label: 'Heartbeat missed', severity: 'WARNING', default: true },
+  { key: 'response.2xx', label: 'HTTP response 2xx (success)', severity: 'INFO', default: false },
+  { key: 'response.3xx', label: 'HTTP response 3xx (redirect)', severity: 'INFO', default: false },
+  { key: 'response.4xx', label: 'HTTP response 4xx (client error)', severity: 'WARNING', default: false },
+  { key: 'response.5xx', label: 'HTTP response 5xx (server error)', severity: 'CRITICAL', default: false },
 ] as const;
 
-const DEFAULT_EVENTS = NOTIFICATION_EVENTS.map((e) => e.key);
-const VALID_EVENTS = new Set<string>(DEFAULT_EVENTS);
+const DEFAULT_EVENTS = NOTIFICATION_EVENTS.filter((e) => e.default).map((e) => e.key);
+const VALID_EVENTS = new Set<string>(NOTIFICATION_EVENTS.map((e) => e.key));
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export interface PrefsView {
@@ -75,12 +86,12 @@ export class NotificationsService {
       tx.notificationPref.findUnique({ where: { tenantId_userId: { tenantId: p.tenantId, userId: p.userId } } }),
     );
     return {
-      events: row?.events ?? DEFAULT_EVENTS,
+      events: row ? jsonArray(row.events) : DEFAULT_EVENTS,
       browser: row?.browser ?? true,
       quietStart: row?.quietStart ?? null,
       quietEnd: row?.quietEnd ?? null,
       quietTz: row?.quietTz ?? 'Europe/Athens',
-      catalog: NOTIFICATION_EVENTS.map((e) => ({ ...e })),
+      catalog: NOTIFICATION_EVENTS.map((e) => ({ key: e.key, label: e.label, severity: e.severity })),
     };
   }
 

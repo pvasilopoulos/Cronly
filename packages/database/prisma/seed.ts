@@ -35,8 +35,6 @@ async function seedRoles(tx: Prisma.TransactionClient, tenantId: string) {
 async function main() {
   await prisma.$transaction(
     async (tx) => {
-      await tx.$executeRaw`SELECT set_config('app.bypass_rls', 'on', true)`;
-
       // Platform super-admin (your staff) — not a customer.
       await tx.user.upsert({
         where: { email: 'admin@cronapp.local' },

@@ -1,16 +1,18 @@
 // CronApp data model — multi-tenant cron platform with fine-grained RBAC.
 //
 // Tenancy model: shared database, every tenant-scoped row carries `tenantId`.
-// PostgreSQL Row-Level Security (see prisma/rls.sql) enforces isolation at the
-// database layer, so an application query that forgets a tenant filter still
-// cannot read or write another tenant's rows.
+// Tenant isolation is enforced in the APPLICATION layer: all tenant data access
+// goes through withTenant() / asSuperAdmin() (packages/database/src/index.ts),
+// which inject a `tenantId` filter on every query via a Prisma client extension.
+// MariaDB/MySQL has no row-level security, so isolation lives in the app — the
+// ONLY sanctioned way to touch tenant data is through those two helpers.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -41,6 +43,14 @@ enum MembershipStatus {
   SUSPENDED
 }
 
+// How a new scheduled run behaves when a previous run of the SAME job is still
+// active (QUEUED or RUNNING) when the next occurrence is due.
+enum OverlapPolicy {
+  ALLOW // run anyway — overlapping runs are permitted (the default)
+  SKIP  // drop this occurrence; advance to the next scheduled time
+  QUEUE // let it wait and run after the current one finishes (no overlap)
+}
+
 enum JobStatus {
   ACTIVE
   PAUSED
@@ -66,6 +76,7 @@ enum ChannelType {
   EMAIL
   SLACK
   WEBHOOK
+  TELEGRAM
 }
 
 // Heartbeat (dead-man's-switch) state for a job: OK while pings/successes arrive
@@ -88,7 +99,8 @@ model Tenant {
   // Feature gating: what this tenant is allowed to access at all. The effective
   // permission of any member is intersected with this list, so a plan downgrade
   // instantly hides features regardless of role.
-  features  String[]     @default([])
+  // JSON array of feature keys (MySQL has no native array type).
+  features  Json         @default("[]")
 
   // Free-form tenant settings (retention override, concurrency cap, etc.)
   settings  Json         @default("{}")
@@ -105,8 +117,29 @@ model Tenant {
   channels    NotificationChannel[]
   alertRules  AlertRule[]
   apiKeys     ApiKey[]
+  maintenanceWindows MaintenanceWindow[]
 
   @@index([status])
+}
+
+// A scheduled, tenant-wide pause. While "now" falls inside any window, the
+// scheduler suppresses every job in the tenant: it neither fires runs nor lets
+// them pile up (due jobs are fast-forwarded to their next slot past the window),
+// so maintenance never produces a burst of catch-up runs when it ends.
+model MaintenanceWindow {
+  id        String   @id @default(cuid())
+  tenantId  String
+  label     String?  // optional human note, e.g. "DB upgrade"
+  startsAt  DateTime
+  endsAt    DateTime
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  tenant Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  // The scheduler's "is any window active now?" check scans by time range.
+  @@index([tenantId, startsAt, endsAt])
 }
 
 model User {
@@ -127,7 +160,8 @@ model User {
   totpEnabled       Boolean  @default(false)
   totpSecret        String?
   totpPendingSecret String?
-  backupCodes       String[] @default([])
+  // JSON array of hashed one-time recovery codes (MySQL has no array type).
+  backupCodes       Json     @default("[]")
 
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
@@ -279,7 +313,8 @@ model Job {
   cronExpr       String    // standard 5-field cron
   timezone       String    @default("Europe/Athens")
   payload        Json      @default("{}")
-  tags           String[]  @default([])
+  // JSON array of free-form tags (MySQL has no array type).
+  tags           Json      @default("[]")
   // Optional grouping label, e.g. "ETL", "Billing" — the console groups jobs by
   // this in the list view. Free-form; null means "Ungrouped".
   group          String?
@@ -288,8 +323,8 @@ model Job {
   enabled        Boolean   @default(true)
 
   // Optional human context, surfaced in the console and in failure alerts.
-  description    String?   // free-text note about what this job does
-  runbookUrl     String?   // link to an on-call runbook / playbook
+  description    String?   @db.Text // free-text note about what this job does
+  runbookUrl     String?   @db.Text // link to an on-call runbook / playbook
 
   // Optional schedule window. Outside [startsAt, endsAt] the scheduler never
   // claims the job, even while it stays ACTIVE — null on either side means
@@ -307,6 +342,10 @@ model Job {
   timeoutMs      Int       @default(30000)
   // Jobs sharing a concurrencyKey never run in parallel (per tenant).
   concurrencyKey String?
+  // What to do when a previous run of THIS job is still active (QUEUED/RUNNING)
+  // at the next scheduled tick: ALLOW (overlap), SKIP (drop this occurrence) or
+  // QUEUE (run it after the current one finishes — no overlap).
+  overlapPolicy  OverlapPolicy @default(ALLOW)
 
   // ── Heartbeat / dead-man's-switch ──
   // When enabled, the job must report liveness at least every
@@ -321,6 +360,14 @@ model Job {
   heartbeatState       HeartbeatState @default(OK)
   heartbeatAlertedAt   DateTime?
 
+  // ── Missed-schedule monitor ──
+  // When enabled, the worker alerts once if a run is overdue (the scheduler never
+  // fired it — e.g. downtime) by more than MISSED_GRACE_SEC. missedAlertedAt marks
+  // that we've alerted for the current lapse; it is cleared the moment the job
+  // fires again, so a later miss re-alerts.
+  missedAlertEnabled Boolean   @default(true)
+  missedAlertedAt    DateTime?
+
   createdBy      String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -332,7 +379,7 @@ model Job {
   @@index([tenantId])
   // The scheduler's hot query: due & enabled jobs, ordered by next_run_at.
   @@index([enabled, status, nextRunAt])
-  @@index([tenantId, tags])
+  // (tags is a JSON column on MySQL — not a btree-indexable array; filtered in app.)
   @@index([tenantId, group])
 }
 
@@ -355,10 +402,10 @@ model JobRun {
   responseSize   BigInt?  // bytes
   storageKey     String?  // object-storage path when offloaded (null if inline)
   responseInline Bytes?   // gzipped body when small enough to inline
-  preview        String?  // first ~2 KB, for snippets in the runs list
+  preview        String?  @db.Text // first ~2 KB, for snippets in the runs list
   truncated      Boolean  @default(false)
 
-  error       String?
+  error       String?   @db.Text
   logsKey     String?   // optional separate object-storage key for logs
 
   job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
@@ -417,7 +464,7 @@ model NotificationChannel {
   type          ChannelType
   name          String
   // Destination: email address, Slack incoming-webhook URL, or generic webhook URL.
-  target        String
+  target        String      @db.Text
   // Optional shared secret used to HMAC-sign outgoing webhook payloads.
   signingSecret String?
   enabled       Boolean     @default(true)
@@ -447,8 +494,9 @@ model ApiKey {
   // SHA-256 (hex) of the full token. Unique so verification is a single indexed
   // lookup; never reversible to the token.
   hash       String    @unique
-  // Permission keys this key may exercise (from the catalog).
-  scopes     String[]  @default([])
+  // Permission keys this key may exercise (from the catalog). JSON array (no
+  // native array type on MySQL).
+  scopes     Json      @default("[]")
   createdBy  String?
   lastUsedAt DateTime?
   expiresAt  DateTime?
@@ -469,8 +517,23 @@ model AlertRule {
   jobId      String?
   // Fire after this many consecutive terminal failures.
   threshold  Int         @default(1)
-  // Terminal statuses that trigger the alert.
-  onStatuses RunStatus[] @default([FAILED, TIMEOUT, DEAD_LETTER])
+  // Terminal statuses that trigger the alert. JSON array of RunStatus values
+  // (MySQL has no native array type).
+  onStatuses Json        @default("[\"FAILED\", \"TIMEOUT\", \"DEAD_LETTER\"]")
+  // Optional per-rule message override. When `body` is set the worker renders it
+  // with the same {{ variable }} engine instead of the workspace/built-in
+  // template for this channel — so one job can have its own alert text (e.g. a
+  // custom Telegram message). `subject` is used only by channels that have one
+  // (email); blank → fall back to the workspace template, then the default.
+  subject    String?
+  body       String?     @db.Text
+  // Throttle / re-notify window: the minimum seconds between notifications for
+  // this rule. 0 = no throttle (fire on every matching occurrence). Set it to
+  // snooze repeats ("don't re-alert for X") — and, because a persistent problem
+  // keeps matching, it doubles as "re-alert every X while it's still happening".
+  muteSec    Int         @default(0)
+  // When this rule last delivered — used with muteSec to gate the next one.
+  lastFiredAt DateTime?
   enabled    Boolean     @default(true)
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt
@@ -497,7 +560,7 @@ model Notification {
   // INFO | WARNING | CRITICAL
   severity  String    @default("WARNING")
   title     String
-  body      String?
+  body      String?   @db.Text
   jobId     String?
   runId     String?
   readAt    DateTime?
@@ -514,7 +577,8 @@ model NotificationPref {
   id         String   @id @default(cuid())
   tenantId   String
   userId     String
-  events     String[] @default(["job.failed", "job.timeout", "job.dead_letter", "heartbeat.missed"])
+  // JSON array of event keys (MySQL has no native array type).
+  events     Json     @default("[\"job.failed\", \"job.timeout\", \"job.dead_letter\", \"heartbeat.missed\"]")
   browser    Boolean  @default(true)
   // Local HH:MM in quietTz; both null = no quiet hours.
   quietStart String?
@@ -560,7 +624,7 @@ model MessageTemplate {
   // INAPP | EMAIL | SLACK | WEBHOOK
   channel   String
   subject   String?
-  body      String
+  body      String   @db.Text
   enabled   Boolean  @default(true)
   updatedAt DateTime @updatedAt
 
@@ -582,17 +646,18 @@ model AppConfig {
   icon      String   @default("◷")
   // Optional custom logo, stored as a self-contained data: URL (image/*). When
   // set, the console and sign-in screen render it instead of the glyph icon.
-  logo      String?
+  logo      String?  @db.LongText
   // Display size (px) of the brand mark in the console shell; the super-admin
   // tunes this from Settings. Clamped by the API to a sensible range.
   logoScale Int      @default(32)
   // Optional browser-tab favicon as a self-contained image data: URL. When set,
   // the console swaps the tab icon to this at runtime.
-  favicon   String?
+  favicon   String?  @db.LongText
   // Which nav items appear in the mobile/tablet footer bar (list of hrefs, in
   // order). Empty → a sensible default. Each item is still permission-gated per
-  // user, so a configured item only shows for users allowed to see it.
-  mobileNav String[] @default([])
+  // user, so a configured item only shows for users allowed to see it. JSON
+  // array of hrefs (MySQL has no native array type).
+  mobileNav Json     @default("[]")
   updatedAt DateTime @updatedAt
 }
 

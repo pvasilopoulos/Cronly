@@ -77,8 +77,10 @@ export function TemplatesPanel() {
 
   if (!canEdit) return null;
 
+  const eventScope =
+    event === 'heartbeat.missed' ? 'heartbeat' : event === 'job.missed' ? 'schedule' : 'failure';
   const variables: TemplateVariable[] = (data?.variables ?? []).filter(
-    (v) => v.scope === 'all' || (event === 'heartbeat.missed' ? v.scope === 'heartbeat' : v.scope === 'failure'),
+    (v) => v.scope === 'all' || v.scope === eventScope,
   );
 
   function insertVar(key: string) {

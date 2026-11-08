@@ -82,6 +82,8 @@ export class JobsService {
           maxRetries: dto.maxRetries ?? 3,
           timeoutMs: dto.timeoutMs ?? 30000,
           concurrencyKey: dto.concurrencyKey,
+          overlapPolicy: dto.overlapPolicy ?? 'ALLOW',
+          missedAlertEnabled: dto.missedAlertEnabled ?? true,
           enabled: dto.enabled ?? true,
           status: dto.enabled === false ? 'PAUSED' : 'ACTIVE',
           description: dto.description?.trim() || null,

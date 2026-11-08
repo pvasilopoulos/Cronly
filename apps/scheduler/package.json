@@ -10,7 +10,6 @@
   "dependencies": {
     "@cronapp/cron": "0.1.0",
     "@cronapp/database": "0.1.0",
-    "bullmq": "5.34.5",
     "cron-parser": "4.9.0"
   },
   "devDependencies": {

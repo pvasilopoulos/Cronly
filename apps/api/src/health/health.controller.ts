@@ -1,9 +1,7 @@
 import { Controller, Get, Res } from '@nestjs/common';
 import type { Response } from 'express';
-import IORedis from 'ioredis';
 import { Public } from '../auth/decorators';
 import { PrismaService } from '../prisma/prisma.service';
-import { env } from '../config/env';
 
 /**
  * Liveness & readiness probes for load balancers / PM2 / orchestration.
@@ -33,25 +31,8 @@ export class HealthController {
       ok = false;
     }
 
-    const redis = new IORedis({
-      host: env.redis.host,
-      port: env.redis.port,
-      password: env.redis.password,
-      lazyConnect: true,
-      maxRetriesPerRequest: 1,
-      connectTimeout: 2000,
-    });
-    try {
-      await redis.connect();
-      checks.redis = (await redis.ping()) === 'PONG' ? 'up' : 'down';
-      if (checks.redis === 'down') ok = false;
-    } catch {
-      checks.redis = 'down';
-      ok = false;
-    } finally {
-      redis.disconnect();
-    }
-
+    // The execution queue lives in the database (QUEUED JobRun rows), so a
+    // healthy database is the whole readiness story — there is no Redis to probe.
     res.status(ok ? 200 : 503).json({ status: ok ? 'ready' : 'degraded', checks });
   }
 }

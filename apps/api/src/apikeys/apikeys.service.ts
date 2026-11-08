@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { jsonArray } from '@cronapp/database';
 import { createHash, randomBytes } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
@@ -129,6 +130,6 @@ export class ApiKeysService {
       .asSuperAdmin((tx) => tx.apiKey.update({ where: { id: key.id }, data: { lastUsedAt: new Date() } }))
       .catch(() => undefined);
 
-    return { id: key.id, tenantId: key.tenantId, scopes: key.scopes, createdBy: key.createdBy };
+    return { id: key.id, tenantId: key.tenantId, scopes: jsonArray(key.scopes), createdBy: key.createdBy };
   }
 }

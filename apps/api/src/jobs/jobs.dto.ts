@@ -1,6 +1,7 @@
 import {
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsISO8601,
   IsObject,
@@ -11,6 +12,8 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+
+export const OVERLAP_POLICIES = ['ALLOW', 'SKIP', 'QUEUE'] as const;
 
 export class CreateJobDto {
   @IsString() @MinLength(2) name!: string;
@@ -23,6 +26,8 @@ export class CreateJobDto {
   @IsOptional() @IsInt() @Min(0) @Max(10) maxRetries?: number;
   @IsOptional() @IsInt() @Min(1000) @Max(600000) timeoutMs?: number;
   @IsOptional() @IsString() concurrencyKey?: string;
+  @IsOptional() @IsIn(OVERLAP_POLICIES) overlapPolicy?: (typeof OVERLAP_POLICIES)[number];
+  @IsOptional() @IsBoolean() missedAlertEnabled?: boolean;
 
   // Optional human context.
   @IsOptional() @IsString() @MaxLength(1000) description?: string;
@@ -49,6 +54,8 @@ export class UpdateJobDto {
   @IsOptional() @IsInt() @Min(0) @Max(10) maxRetries?: number;
   @IsOptional() @IsInt() @Min(1000) @Max(600000) timeoutMs?: number;
   @IsOptional() @IsString() concurrencyKey?: string;
+  @IsOptional() @IsIn(OVERLAP_POLICIES) overlapPolicy?: (typeof OVERLAP_POLICIES)[number];
+  @IsOptional() @IsBoolean() missedAlertEnabled?: boolean;
   @IsOptional() @IsBoolean() enabled?: boolean;
 
   @IsOptional() @IsString() @MaxLength(1000) description?: string;

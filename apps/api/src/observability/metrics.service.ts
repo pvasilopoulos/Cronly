@@ -126,26 +126,27 @@ export class MetricsService {
       const n = (v: unknown) => Number(v ?? 0);
 
       const jobsRows = await tx.$queryRaw<{ status: string; n: bigint }[]>`
-        SELECT status::text AS status, count(*)::bigint AS n FROM "Job" GROUP BY status`;
+        SELECT status AS status, count(*) AS n FROM Job GROUP BY status`;
       const jobsEnabled = await tx.$queryRaw<{ n: bigint }[]>`
-        SELECT count(*)::bigint AS n FROM "Job" WHERE enabled`;
+        SELECT count(*) AS n FROM Job WHERE enabled = true`;
       const runsRows = await tx.$queryRaw<{ status: string; n: bigint }[]>`
-        SELECT status::text AS status, count(*)::bigint AS n FROM "JobRun" GROUP BY status`;
+        SELECT status AS status, count(*) AS n FROM JobRun GROUP BY status`;
       const lastMinute = await tx.$queryRaw<{ n: bigint }[]>`
-        SELECT count(*)::bigint AS n FROM "JobRun" WHERE "scheduledAt" > now() - interval '60 seconds'`;
+        SELECT count(*) AS n FROM JobRun WHERE scheduledAt > UTC_TIMESTAMP() - INTERVAL 60 SECOND`;
       const dur = await tx.$queryRaw<{ p50: number | null; p95: number | null; p99: number | null }[]>`
         SELECT
-          percentile_cont(0.5)  WITHIN GROUP (ORDER BY "durationMs") AS p50,
-          percentile_cont(0.95) WITHIN GROUP (ORDER BY "durationMs") AS p95,
-          percentile_cont(0.99) WITHIN GROUP (ORDER BY "durationMs") AS p99
-        FROM "JobRun"
-        WHERE "finishedAt" > now() - interval '5 minutes' AND "durationMs" IS NOT NULL`;
+          PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY durationMs) OVER () AS p50,
+          PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY durationMs) OVER () AS p95,
+          PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY durationMs) OVER () AS p99
+        FROM JobRun
+        WHERE finishedAt > UTC_TIMESTAMP() - INTERVAL 5 MINUTE AND durationMs IS NOT NULL
+        LIMIT 1`;
       const hb = await tx.$queryRaw<{ n: bigint }[]>`
-        SELECT count(*)::bigint AS n FROM "Job" WHERE "heartbeatEnabled" AND "heartbeatState" = 'MISSING'`;
+        SELECT count(*) AS n FROM Job WHERE heartbeatEnabled = true AND heartbeatState = 'MISSING'`;
       const lag = await tx.$queryRaw<{ secs: number | null }[]>`
-        SELECT EXTRACT(EPOCH FROM (now() - min("nextRunAt")))::float8 AS secs
-        FROM "Job" WHERE enabled AND status = 'ACTIVE' AND "nextRunAt" IS NOT NULL AND "nextRunAt" < now()`;
-      const tenants = await tx.$queryRaw<{ n: bigint }[]>`SELECT count(*)::bigint AS n FROM "Tenant"`;
+        SELECT TIMESTAMPDIFF(SECOND, min(nextRunAt), UTC_TIMESTAMP()) AS secs
+        FROM Job WHERE enabled = true AND status = 'ACTIVE' AND nextRunAt IS NOT NULL AND nextRunAt < UTC_TIMESTAMP()`;
+      const tenants = await tx.$queryRaw<{ n: bigint }[]>`SELECT count(*) AS n FROM Tenant`;
 
       const running = runsRows.find((r) => r.status === 'RUNNING');
       return {

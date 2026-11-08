@@ -126,6 +126,131 @@ export class RunsService {
   }
 
   /**
+   * Per-job run metrics for a dashboard: one bucket per UTC day over the last
+   * `days`, plus headline totals. Raw SQL carries its own tenant predicate (raw
+   * queries are not auto-fenced).
+   */
+  async metricsForJob(p: Principal, jobId: string, days = 7) {
+    const span = Math.min(Math.max(days, 1), 90);
+    const since = new Date(Date.now() - span * 24 * 3600 * 1000);
+    const rows = await this.prisma.client.$queryRaw<
+      { day: string; status: string; c: bigint; avgMs: number | null }[]
+    >(Prisma.sql`
+      SELECT DATE(scheduledAt) AS day, status, COUNT(*) AS c, AVG(durationMs) AS avgMs
+      FROM JobRun
+      WHERE tenantId = ${p.tenantId} AND jobId = ${jobId} AND scheduledAt >= ${since}
+      GROUP BY day, status
+      ORDER BY day ASC
+    `);
+
+    const FAIL = new Set(['FAILED', 'TIMEOUT', 'DEAD_LETTER']);
+    const byDay = new Map<string, { total: number; success: number; warning: number; failed: number; durSum: number; durN: number }>();
+    for (const r of rows) {
+      const key = typeof r.day === 'string' ? r.day : new Date(r.day as any).toISOString().slice(0, 10);
+      const b = byDay.get(key) ?? { total: 0, success: 0, warning: 0, failed: 0, durSum: 0, durN: 0 };
+      const n = Number(r.c);
+      b.total += n;
+      if (r.status === 'SUCCESS') b.success += n;
+      else if (r.status === 'WARNING') b.warning += n;
+      else if (FAIL.has(r.status)) b.failed += n;
+      if (r.avgMs != null) {
+        b.durSum += Number(r.avgMs) * n;
+        b.durN += n;
+      }
+      byDay.set(key, b);
+    }
+
+    // Emit a contiguous series (zero-filled) so the chart has no gaps.
+    const buckets: {
+      day: string;
+      total: number;
+      success: number;
+      warning: number;
+      failed: number;
+      avgMs: number | null;
+    }[] = [];
+    const cursor = new Date(since);
+    cursor.setUTCHours(0, 0, 0, 0);
+    const end = new Date();
+    end.setUTCHours(0, 0, 0, 0);
+    while (cursor <= end) {
+      const key = cursor.toISOString().slice(0, 10);
+      const b = byDay.get(key);
+      buckets.push({
+        day: key,
+        total: b?.total ?? 0,
+        success: b?.success ?? 0,
+        warning: b?.warning ?? 0,
+        failed: b?.failed ?? 0,
+        avgMs: b && b.durN > 0 ? Math.round(b.durSum / b.durN) : null,
+      });
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    const totals = buckets.reduce(
+      (a, b) => ({
+        total: a.total + b.total,
+        success: a.success + b.success,
+        warning: a.warning + b.warning,
+        failed: a.failed + b.failed,
+      }),
+      { total: 0, success: 0, warning: 0, failed: 0 },
+    );
+    const successRate = totals.total > 0 ? Math.round((totals.success / totals.total) * 100) : null;
+
+    return { days: span, totals: { ...totals, successRate }, buckets };
+  }
+
+  /**
+   * A flat list of runs for export (CSV/JSON). Honours the same filters as the
+   * runs list, capped so an export can never be unbounded.
+   */
+  async exportRuns(
+    p: Principal,
+    opts: { jobId?: string; statuses?: RunStatusKey[]; days?: number; limit?: number },
+  ) {
+    const where: Prisma.JobRunWhereInput = {};
+    if (opts.jobId) where.jobId = opts.jobId;
+    if (opts.statuses && opts.statuses.length > 0) where.status = { in: opts.statuses };
+    if (opts.days && opts.days > 0) {
+      where.scheduledAt = { gte: new Date(Date.now() - opts.days * 24 * 3600 * 1000) };
+    }
+    const runs = await this.prisma.forTenant(p.tenantId, (tx) =>
+      tx.jobRun.findMany({
+        where,
+        select: {
+          id: true,
+          jobId: true,
+          status: true,
+          attempt: true,
+          scheduledAt: true,
+          startedAt: true,
+          finishedAt: true,
+          durationMs: true,
+          responseSize: true,
+          error: true,
+          job: { select: { name: true } },
+        },
+        orderBy: { scheduledAt: 'desc' },
+        take: Math.min(opts.limit ?? 5000, 20000),
+      }),
+    );
+    return runs.map((r) => ({
+      id: r.id,
+      jobId: r.jobId,
+      jobName: r.job?.name ?? '',
+      status: r.status,
+      attempt: r.attempt,
+      scheduledAt: r.scheduledAt ? r.scheduledAt.toISOString() : '',
+      startedAt: r.startedAt ? r.startedAt.toISOString() : '',
+      finishedAt: r.finishedAt ? r.finishedAt.toISOString() : '',
+      durationMs: r.durationMs ?? '',
+      responseSize: r.responseSize != null ? Number(r.responseSize) : '',
+      error: r.error ?? '',
+    }));
+  }
+
+  /**
    * Load the full response body. Small payloads are inline (gzipped) in
    * Postgres; larger ones live in object storage and are streamed through.
    * Returns a Buffer here for simplicity — the controller streams it.

@@ -72,10 +72,14 @@ export interface Job {
   heartbeatState?: HeartbeatState;
 }
 
+export type OverlapPolicy = 'ALLOW' | 'SKIP' | 'QUEUE';
+
 /** Full job row from GET /jobs/:id — includes the handler payload for editing. */
 export interface JobDetail extends Job {
   payload: Record<string, unknown>;
   concurrencyKey: string | null;
+  overlapPolicy: OverlapPolicy;
+  missedAlertEnabled: boolean;
   createdBy?: string | null;
 }
 
@@ -135,8 +139,8 @@ export interface Secret {
   updatedAt: string;
 }
 
-export type ChannelType = 'EMAIL' | 'SLACK' | 'WEBHOOK';
-export type AlertStatus = 'FAILED' | 'TIMEOUT' | 'DEAD_LETTER';
+export type ChannelType = 'EMAIL' | 'SLACK' | 'WEBHOOK' | 'TELEGRAM';
+export type AlertStatus = 'FAILED' | 'TIMEOUT' | 'DEAD_LETTER' | 'WARNING' | 'SUCCESS';
 
 export interface NotificationChannel {
   id: string;
@@ -335,7 +339,7 @@ export interface TemplateCatalogChannel {
 export interface TemplateVariable {
   key: string;
   label: string;
-  scope: 'all' | 'failure' | 'heartbeat';
+  scope: 'all' | 'failure' | 'heartbeat' | 'schedule';
   sample: string;
 }
 export interface EffectiveTemplate {
@@ -359,6 +363,9 @@ export interface AlertRule {
   jobId: string | null;
   threshold: number;
   onStatuses: AlertStatus[];
+  muteSec: number;
+  subject: string | null;
+  body: string | null;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
