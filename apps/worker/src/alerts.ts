@@ -1,8 +1,6 @@
-import { createHmac } from 'node:crypto';
 import { getPrisma, jsonArray } from '@cronapp/database';
 import { renderFields, type TemplateChannel, type TemplateContext } from '@cronapp/templating';
-import { safeFetch } from './net-guard';
-import { sendMail } from './mailer';
+import { deliverToChannel } from '@cronapp/notify';
 import { notifyTenant } from './notifications';
 import { renderFromRows, type TemplateRow } from './templates';
 
@@ -178,79 +176,4 @@ async function deliver(channel: any, ev: AlertEvent): Promise<void> {
       )
     : renderFromRows(ev.templates, ev.event, channel.type, ev.tctx);
   await deliverToChannel(channel, { subject: rendered.subject ?? null, body: rendered.body });
-}
-
-/**
- * Deliver one already-rendered message to a notification channel. Shared by
- * run-failure alerts and heartbeat-miss alerts so both honour the same SSRF
- * guard and webhook signing. For SLACK/EMAIL `body` is the text; for WEBHOOK
- * `body` is the full JSON payload string (HMAC-signed with the channel's signing
- * secret when set). `subject` is the email subject line.
- */
-export async function deliverToChannel(
-  channel: any,
-  rendered: { subject: string | null; body: string },
-): Promise<void> {
-  if (channel.type === 'SLACK') {
-    await safeFetch(channel.target, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: rendered.body }),
-    });
-    return;
-  }
-
-  if (channel.type === 'WEBHOOK') {
-    // The webhook body is the tenant's own JSON template, rendered. Sign the
-    // exact bytes we send so a receiver can verify integrity.
-    const body = rendered.body;
-    const headers: Record<string, string> = { 'content-type': 'application/json' };
-    if (channel.signingSecret) {
-      headers['x-cronapp-signature'] =
-        'sha256=' + createHmac('sha256', channel.signingSecret).update(body).digest('hex');
-    }
-    await safeFetch(channel.target, { method: 'POST', headers, body });
-    return;
-  }
-
-  if (channel.type === 'TELEGRAM') {
-    // target = chat id, signingSecret = bot token. Telegram's Bot API is a public
-    // host, so the SSRF guard permits it; the token stays server-side.
-    const token = channel.signingSecret;
-    if (!token) {
-      console.error(`[alert:telegram→${channel.target}] no bot token configured on channel`);
-      return;
-    }
-    const text = (rendered.subject ? `${rendered.subject}\n` : '') + rendered.body;
-    const res = await safeFetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: channel.target, text, disable_web_page_preview: true }),
-    });
-    // Telegram answers 2xx with {ok:true}, or 4xx with {ok:false, description}.
-    // fetch doesn't throw on 4xx, so a wrong chat id or bot token would fail
-    // silently — surface it to the caller's catch (and the worker log) instead.
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`Telegram sendMessage failed (${res.status}): ${detail.slice(0, 300)}`);
-    }
-    return;
-  }
-
-  if (channel.type === 'EMAIL') {
-    // Deliver through the shared SMTP transport. Without SMTP_HOST configured
-    // this is a dry-run (composed, logged, not sent) so alerting still works
-    // end-to-end in dev without a mail server.
-    const res = await sendMail({
-      to: channel.target,
-      subject: rendered.subject || 'CronApp alert',
-      text: rendered.body,
-    });
-    console.log(
-      res.mode === 'sent'
-        ? `[alert:email→${channel.target}] sent (${res.messageId})`
-        : `[alert:email→${channel.target}] dry-run (no SMTP configured): ${rendered.body}`,
-    );
-    return;
-  }
 }

@@ -1,4 +1,6 @@
-// SSRF guard for the HTTP executor.
+// SSRF guard for outbound HTTP (the HTTP job executor and notification
+// channels). Shared by the worker (delivery) and the API (the "send test"
+// endpoint) so both apply the same validation.
 //
 // A tenant controls the target URL, so a naive fetch is a server-side request
 // forgery hole: it could reach cloud metadata (169.254.169.254), loopback, or

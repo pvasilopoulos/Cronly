@@ -1,11 +1,11 @@
 import { getPrisma, decryptSecret } from '@cronapp/database';
 import { sendMail as send, type MailConfig, type MailProvider, type SendResult } from '@cronapp/mailer';
 
-// Email delivery for the worker (the `email` job handler and EMAIL notification
-// channels). The effective config comes from the DB (SmtpConfig, super-admin
-// managed) — classic SMTP, Microsoft 365 (Graph) or Gmail (service account) —
-// then falls back to SMTP_* env vars, then to a dry-run (composed + logged,
-// never sent) so dev and tests never hang on a socket or hit a provider.
+// Email delivery (the `email` job handler and EMAIL notification channels).
+// The effective config comes from the DB (SmtpConfig, super-admin managed) —
+// classic SMTP, Microsoft 365 (Graph) or Gmail (service account) — then falls
+// back to SMTP_* env vars, then to a dry-run (composed + logged, never sent) so
+// dev and tests never hang on a socket or hit a provider.
 
 export type { SendResult } from '@cronapp/mailer';
 

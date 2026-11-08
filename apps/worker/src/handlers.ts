@@ -5,8 +5,7 @@
 
 import { createHmac } from 'node:crypto';
 import { getPrisma } from '@cronapp/database';
-import { safeFetch } from './net-guard';
-import { sendMail } from './mailer';
+import { safeFetch, sendMail } from '@cronapp/notify';
 
 export interface HandlerResult {
   contentType: string;
@@ -82,7 +81,7 @@ const webhook: Handler = async (payload, ctx) => {
 };
 
 // ─────────────────────────── email (SMTP) ───────────────────────────
-// The SMTP transport itself lives in ./mailer and is shared with alert delivery.
+// The SMTP transport itself lives in @cronapp/notify and is shared with alerts.
 
 const email: Handler = async (payload) => {
   const to = payload?.to;

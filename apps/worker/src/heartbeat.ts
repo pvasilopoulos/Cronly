@@ -1,6 +1,6 @@
 import { getPrisma, Prisma } from '@cronapp/database';
 import type { TemplateContext } from '@cronapp/templating';
-import { deliverToChannel } from './alerts';
+import { deliverToChannel } from '@cronapp/notify';
 import { notifyTenant } from './notifications';
 import { renderFromRows, type TemplateRow } from './templates';
 

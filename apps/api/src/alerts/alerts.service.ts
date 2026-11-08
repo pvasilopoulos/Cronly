@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@cronapp/database';
+import { deliverToChannel } from '@cronapp/notify';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { QuotaService } from '../quota/quota.service';
@@ -131,5 +132,49 @@ export class AlertsService {
     await this.prisma.forTenant(p.tenantId, (tx) => tx.alertRule.deleteMany({ where: { id } }));
     await this.audit.record_for(p, 'alert.rule.deleted', id);
     return { ok: true };
+  }
+
+  // ── Send test ──
+  // Deliver a fixed test message to a channel, right now, and report the result
+  // so an admin can verify a Telegram chat id / bot token (or any destination)
+  // without digging through worker logs. Uses the SAME delivery path as real
+  // alerts (@cronapp/notify), so a success here means real alerts will arrive.
+  async testChannel(p: Principal, id: string) {
+    const channel = await this.prisma.forTenant(p.tenantId, (tx) =>
+      tx.notificationChannel.findUnique({ where: { id } }),
+    );
+    if (!channel) throw new NotFoundException('Channel not found');
+    return this.runTest(p, channel);
+  }
+
+  async testRule(p: Principal, id: string) {
+    const rule = await this.prisma.forTenant(p.tenantId, (tx) =>
+      tx.alertRule.findFirst({ where: { id }, include: { channel: true } }),
+    );
+    if (!rule?.channel) throw new NotFoundException('Rule not found');
+    return this.runTest(p, rule.channel);
+  }
+
+  private async runTest(
+    p: Principal,
+    channel: { id: string; type: string; name: string; target: string; signingSecret: string | null },
+  ): Promise<{ ok: boolean; info?: string | null; error?: string }> {
+    // Webhooks must receive valid JSON; everyone else gets a plain line.
+    const body =
+      channel.type === 'WEBHOOK'
+        ? JSON.stringify({ event: 'test', message: 'CronApp test notification', channel: channel.name })
+        : `🔔 CronApp test — your "${channel.name}" ${channel.type.toLowerCase()} destination is configured correctly.`;
+    try {
+      const res = await deliverToChannel(
+        { type: channel.type, target: channel.target, signingSecret: channel.signingSecret },
+        { subject: 'CronApp test notification', body },
+      );
+      await this.audit.record_for(p, 'alert.channel.tested', channel.id, { ok: true });
+      return { ok: true, info: res.info ?? null };
+    } catch (e) {
+      const error = String((e as Error)?.message ?? e).slice(0, 400);
+      await this.audit.record_for(p, 'alert.channel.tested', channel.id, { ok: false, error });
+      return { ok: false, error };
+    }
   }
 }

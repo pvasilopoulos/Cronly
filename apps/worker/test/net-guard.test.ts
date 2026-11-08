@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isBlockedIp, assertSafeUrl, BlockedUrlError } from '../src/net-guard';
+import { isBlockedIp, assertSafeUrl, BlockedUrlError } from '@cronapp/notify';
 
 test('blocks loopback, private, link-local and CGNAT IPv4', () => {
   for (const ip of [

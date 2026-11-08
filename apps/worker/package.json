@@ -11,6 +11,7 @@
   "dependencies": {
     "@cronapp/database": "0.1.0",
     "@cronapp/mailer": "0.1.0",
+    "@cronapp/notify": "0.1.0",
     "@cronapp/handlers": "0.1.0",
     "@cronapp/rbac": "0.1.0",
     "@cronapp/storage": "0.1.0",

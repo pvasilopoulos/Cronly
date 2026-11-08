@@ -173,6 +173,7 @@ export function JobNotifications({ jobId }: { jobId: string }) {
                 )}
                 {canManage && (
                   <div className="ml-auto flex items-center gap-1">
+                    <TestRuleButton id={r.id} />
                     <button
                       onClick={() => setEditing(r)}
                       className="rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-surface2 hover:text-fg"
@@ -197,6 +198,57 @@ export function JobNotifications({ jobId }: { jobId: string }) {
         </>
       )}
     </section>
+  );
+}
+
+function TestRuleButton({ id }: { id: string }) {
+  const [state, setState] = useState<'idle' | 'testing' | 'ok' | 'err'>('idle');
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function run() {
+    setState('testing');
+    setMsg(null);
+    try {
+      const r = await api<{ ok: boolean; info?: string | null; error?: string }>(
+        `/alerts/rules/${id}/test`,
+        { method: 'POST' },
+      );
+      if (r.ok) {
+        setState('ok');
+        setMsg(r.info || 'sent');
+      } else {
+        setState('err');
+        setMsg(r.error || 'failed');
+      }
+    } catch (e: any) {
+      setState('err');
+      setMsg(String(e?.message ?? e));
+    }
+    // Clear the inline result after a while so the row isn't permanently noisy.
+    setTimeout(() => {
+      setState('idle');
+      setMsg(null);
+    }, 8000);
+  }
+
+  return (
+    <span className="flex items-center gap-1">
+      <button
+        onClick={run}
+        disabled={state === 'testing'}
+        className="rounded-md px-2 py-1 text-xs font-medium text-muted hover:bg-surface2 hover:text-fg disabled:opacity-50"
+      >
+        {state === 'testing' ? 'Testing…' : 'Test'}
+      </button>
+      {msg && (
+        <span
+          title={msg}
+          className={`max-w-[200px] truncate text-[11px] font-medium ${state === 'ok' ? 'text-ok' : 'text-err'}`}
+        >
+          {state === 'ok' ? `✓ ${msg}` : `✕ ${msg}`}
+        </span>
+      )}
+    </span>
   );
 }
 

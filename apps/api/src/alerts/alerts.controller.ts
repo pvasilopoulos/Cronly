@@ -26,6 +26,12 @@ export class AlertsController {
     return this.alerts.removeChannel(p, id);
   }
 
+  @Post('channels/:id/test')
+  @RequirePermissions('alerts:manage')
+  testChannel(@CurrentPrincipal() p: Principal, @Param('id') id: string) {
+    return this.alerts.testChannel(p, id);
+  }
+
   @Get('rules')
   @RequirePermissions('alerts:read')
   listRules(@CurrentPrincipal() p: Principal) {
@@ -48,5 +54,11 @@ export class AlertsController {
   @RequirePermissions('alerts:manage')
   removeRule(@CurrentPrincipal() p: Principal, @Param('id') id: string) {
     return this.alerts.removeRule(p, id);
+  }
+
+  @Post('rules/:id/test')
+  @RequirePermissions('alerts:manage')
+  testRule(@CurrentPrincipal() p: Principal, @Param('id') id: string) {
+    return this.alerts.testRule(p, id);
   }
 }
