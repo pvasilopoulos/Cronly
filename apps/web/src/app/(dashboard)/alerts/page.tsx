@@ -168,6 +168,11 @@ export default function AlertsPage() {
                 <span className="text-xs text-muted">
                   after <b className="text-fg">{r.threshold}</b> in a row
                 </span>
+                {r.muteSec > 0 && (
+                  <span className="text-xs text-muted">
+                    · mutes <b className="text-fg">{Math.round(r.muteSec / 60)}m</b>
+                  </span>
+                )}
                 {!r.enabled && (
                   <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
                     disabled
@@ -378,6 +383,7 @@ function RuleEditor({
   const [channelId, setChannelId] = useState(channels[0]?.id ?? '');
   const [jobId, setJobId] = useState<string>(''); // '' → all jobs
   const [threshold, setThreshold] = useState(1);
+  const [muteMin, setMuteMin] = useState(0);
   const [statuses, setStatuses] = useState<Set<AlertStatus>>(new Set(DEFAULT_RULE_STATUSES));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -400,6 +406,7 @@ function RuleEditor({
           channelId,
           ...(jobId ? { jobId } : {}),
           threshold,
+          muteSec: Math.max(0, Math.round(muteMin)) * 60,
           onStatuses: [...statuses],
         },
       });
@@ -482,6 +489,22 @@ function RuleEditor({
               className={`${inputCls} w-24`}
             />
             <span className="text-sm text-muted">consecutive failure(s) before alerting</span>
+          </div>
+        </div>
+        <div>
+          <label className={labelCls}>Don’t re-alert for</label>
+          <div className="flex items-center gap-3">
+            <input
+              type="number"
+              min={0}
+              max={43200}
+              value={muteMin}
+              onChange={(e) => setMuteMin(Math.max(0, Math.min(43200, Number(e.target.value) || 0)))}
+              className={`${inputCls} w-24`}
+            />
+            <span className="text-sm text-muted">
+              minutes (0 = every matching run); re-alerts once this long passes while it persists
+            </span>
           </div>
         </div>
       </div>

@@ -90,6 +90,7 @@ export class AlertsService {
           jobId: dto.jobId ?? null,
           threshold: dto.threshold ?? 1,
           ...(dto.onStatuses ? { onStatuses: dto.onStatuses } : {}),
+          muteSec: dto.muteSec ?? 0,
           subject: norm(dto.subject),
           body: norm(dto.body),
           enabled: dto.enabled ?? true,
@@ -110,6 +111,7 @@ export class AlertsService {
     if (dto.channelId !== undefined) data.channelId = dto.channelId;
     if (dto.threshold !== undefined) data.threshold = dto.threshold;
     if (dto.onStatuses !== undefined) data.onStatuses = dto.onStatuses;
+    if (dto.muteSec !== undefined) data.muteSec = dto.muteSec;
     if (dto.enabled !== undefined) data.enabled = dto.enabled;
     if (dto.subject !== undefined) data.subject = norm(dto.subject);
     if (dto.body !== undefined) data.body = norm(dto.body);

@@ -527,6 +527,13 @@ model AlertRule {
   // (email); blank → fall back to the workspace template, then the default.
   subject    String?
   body       String?     @db.Text
+  // Throttle / re-notify window: the minimum seconds between notifications for
+  // this rule. 0 = no throttle (fire on every matching occurrence). Set it to
+  // snooze repeats ("don't re-alert for X") — and, because a persistent problem
+  // keeps matching, it doubles as "re-alert every X while it's still happening".
+  muteSec    Int         @default(0)
+  // When this rule last delivered — used with muteSec to gate the next one.
+  lastFiredAt DateTime?
   enabled    Boolean     @default(true)
   createdAt  DateTime    @default(now())
   updatedAt  DateTime    @updatedAt

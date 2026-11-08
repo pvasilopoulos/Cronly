@@ -29,6 +29,8 @@ export class CreateRuleDto {
   @IsOptional() @IsArray() @IsIn(ALERT_STATUSES, { each: true })
   onStatuses?: (typeof ALERT_STATUSES)[number][];
   @IsOptional() @IsBoolean() enabled?: boolean;
+  // Minimum seconds between notifications for this rule (0 = no throttle).
+  @IsOptional() @IsInt() @Min(0) @Max(2592000) muteSec?: number;
   // Optional per-rule message override (blank → workspace template → default).
   @IsOptional() @IsString() @MaxLength(400) subject?: string;
   @IsOptional() @IsString() @MaxLength(8000) body?: string;
@@ -41,6 +43,7 @@ export class UpdateRuleDto {
   @IsOptional() @IsArray() @IsIn(ALERT_STATUSES, { each: true })
   onStatuses?: (typeof ALERT_STATUSES)[number][];
   @IsOptional() @IsBoolean() enabled?: boolean;
+  @IsOptional() @IsInt() @Min(0) @Max(2592000) muteSec?: number;
   @IsOptional() @IsString() @MaxLength(400) subject?: string;
   @IsOptional() @IsString() @MaxLength(8000) body?: string;
 }

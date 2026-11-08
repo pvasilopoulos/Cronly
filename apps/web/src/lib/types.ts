@@ -363,6 +363,7 @@ export interface AlertRule {
   jobId: string | null;
   threshold: number;
   onStatuses: AlertStatus[];
+  muteSec: number;
   subject: string | null;
   body: string | null;
   enabled: boolean;

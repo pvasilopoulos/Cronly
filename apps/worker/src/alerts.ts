@@ -133,6 +133,18 @@ export async function maybeAlert(
     // once the streak is long enough — with threshold 1 that means "every time".
     const fire = isFailure ? streak === rule.threshold : streak >= rule.threshold;
     if (!fire) continue;
+    // Throttle / re-notify: when muteSec > 0, deliver at most once per muteSec
+    // for this rule. The claim is a single conditional UPDATE so that, even with
+    // several worker instances processing runs of the same job at once, exactly
+    // one delivery wins per window (the others see count 0 and skip).
+    if (rule.muteSec > 0) {
+      const cutoff = new Date(Date.now() - rule.muteSec * 1000);
+      const claim = await prisma.alertRule.updateMany({
+        where: { id: rule.id, OR: [{ lastFiredAt: null }, { lastFiredAt: { lt: cutoff } }] },
+        data: { lastFiredAt: new Date() },
+      });
+      if (claim.count === 0) continue; // still inside the mute window
+    }
     tctx.consecutive = streak;
     await deliver(rule.channel, {
       tenantId,

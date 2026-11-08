@@ -166,6 +166,11 @@ export function JobNotifications({ jobId }: { jobId: string }) {
                 <span className="text-xs text-muted">
                   after <b className="text-fg">{r.threshold}</b> in a row
                 </span>
+                {r.muteSec > 0 && (
+                  <span className="text-xs text-muted">
+                    · mutes <b className="text-fg">{Math.round(r.muteSec / 60)}m</b>
+                  </span>
+                )}
                 {!r.enabled && (
                   <span className="rounded bg-warn/15 px-1.5 py-0.5 text-[10px] font-medium text-warn">
                     disabled
@@ -301,6 +306,7 @@ function RuleForm({
     new Set(rule?.onStatuses ?? DEFAULT_STATUSES),
   );
   const [threshold, setThreshold] = useState(rule?.threshold ?? 1);
+  const [muteMin, setMuteMin] = useState(Math.round((rule?.muteSec ?? 0) / 60));
   const [customize, setCustomize] = useState(!!rule?.body);
   const [subject, setSubject] = useState(rule?.subject ?? '');
   const [body, setBody] = useState(rule?.body ?? '');
@@ -348,7 +354,8 @@ function RuleForm({
 
       // Blank custom message (or customize off) clears the override server-side.
       const msg = customize && body.trim() ? { subject, body } : { subject: '', body: '' };
-      const payload = { channelId: useChannelId, threshold, onStatuses: [...statuses], ...msg };
+      const muteSec = Math.max(0, Math.round(muteMin)) * 60;
+      const payload = { channelId: useChannelId, threshold, onStatuses: [...statuses], muteSec, ...msg };
 
       if (editing) {
         await api(`/alerts/rules/${rule!.id}`, { method: 'PUT', body: payload });
@@ -482,6 +489,24 @@ function RuleForm({
               className={`${inputCls} w-24`}
             />
             <span className="text-xs text-muted">consecutive matching run(s) before alerting</span>
+          </div>
+        </div>
+
+        {/* ── Throttle / re-notify ── */}
+        <div>
+          <label className={labelCls}>Don’t re-alert for</label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0}
+              max={43200}
+              value={muteMin}
+              onChange={(e) => setMuteMin(Math.max(0, Math.min(43200, Number(e.target.value) || 0)))}
+              className={`${inputCls} w-24`}
+            />
+            <span className="text-xs text-muted">
+              minutes (0 = every matching run). While the problem persists, it re-alerts once this long has passed.
+            </span>
           </div>
         </div>
 
