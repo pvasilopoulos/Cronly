@@ -12,6 +12,7 @@ export type TemplateEvent =
   | 'job.dead_letter'
   | 'job.warning'
   | 'job.success'
+  | 'job.missed'
   | 'heartbeat.missed';
 
 export const TEMPLATE_EVENTS: { key: TemplateEvent; label: string; severity: string }[] = [
@@ -20,6 +21,7 @@ export const TEMPLATE_EVENTS: { key: TemplateEvent; label: string; severity: str
   { key: 'job.dead_letter', label: 'Job dead-lettered', severity: 'CRITICAL' },
   { key: 'job.warning', label: 'Job finished with a warning', severity: 'WARNING' },
   { key: 'job.success', label: 'Job succeeded', severity: 'INFO' },
+  { key: 'job.missed', label: 'Scheduled run missed', severity: 'WARNING' },
   { key: 'heartbeat.missed', label: 'Heartbeat missed', severity: 'WARNING' },
 ];
 
@@ -35,7 +37,7 @@ export interface TemplateVariable {
   key: string;
   label: string;
   /** Which events this variable is meaningful for ('all' = every event). */
-  scope: 'all' | 'failure' | 'heartbeat';
+  scope: 'all' | 'failure' | 'heartbeat' | 'schedule';
   sample: string;
 }
 
@@ -57,6 +59,9 @@ export const TEMPLATE_VARIABLES: TemplateVariable[] = [
   { key: 'consecutive', label: 'Consecutive failures', scope: 'failure', sample: '3' },
   { key: 'heartbeat.overdueSec', label: 'Overdue seconds', scope: 'heartbeat', sample: '360' },
   { key: 'heartbeat.lastPingAt', label: 'Last ping (ISO)', scope: 'heartbeat', sample: '2026-01-15T02:54:00.000Z' },
+  { key: 'schedule.expectedAt', label: 'Expected at (ISO)', scope: 'schedule', sample: '2026-01-15T03:00:00.000Z' },
+  { key: 'schedule.overdueSec', label: 'Overdue seconds', scope: 'schedule', sample: '420' },
+  { key: 'schedule.cronExpr', label: 'Cron expression', scope: 'schedule', sample: '0 3 * * *' },
 ];
 
 export interface TemplateFields {
@@ -108,6 +113,26 @@ def('heartbeat.missed', 'TELEGRAM', {
 });
 def('heartbeat.missed', 'WEBHOOK', {
   body: '{\n  "event": "heartbeat.missed",\n  "job": "{{ job.name }}",\n  "jobId": "{{ job.id }}",\n  "overdueSec": {{ heartbeat.overdueSec }}\n}',
+});
+
+// job.missed — a scheduled run that never fired on time (scheduler downtime or a
+// stuck lock); detected by the worker's missed-schedule monitor, not a run.
+def('job.missed', 'INAPP', {
+  subject: 'Job "{{ job.name }}" missed its schedule',
+  body: 'Expected at {{ schedule.expectedAt }}; overdue by {{ schedule.overdueSec }}s.',
+});
+def('job.missed', 'EMAIL', {
+  subject: '🟠 {{ job.name }} missed its schedule',
+  body: 'Job "{{ job.name }}" did not run on its schedule {{ schedule.cronExpr }}.\n\nExpected at: {{ schedule.expectedAt }}\nOverdue by: {{ schedule.overdueSec }}s\nRunbook: {{ job.runbookUrl || "—" }}\n\n— {{ tenant.name }} · CronApp',
+});
+def('job.missed', 'SLACK', {
+  body: '🟠 CronApp: job "{{ job.name }}" missed its schedule — expected {{ schedule.expectedAt }}, overdue by {{ schedule.overdueSec }}s',
+});
+def('job.missed', 'TELEGRAM', {
+  body: '🟠 CronApp\nJob "{{ job.name }}" missed its schedule\nExpected: {{ schedule.expectedAt }}\nOverdue: {{ schedule.overdueSec }}s',
+});
+def('job.missed', 'WEBHOOK', {
+  body: '{\n  "event": "job.missed",\n  "job": "{{ job.name }}",\n  "jobId": "{{ job.id }}",\n  "expectedAt": "{{ schedule.expectedAt }}",\n  "overdueSec": {{ schedule.overdueSec }}\n}',
 });
 
 // job.warning — a run that completed but reported a soft problem (result.warning).
@@ -162,6 +187,7 @@ export interface TemplateContext {
   consecutive?: number;
   tenant?: { name?: string };
   heartbeat?: { overdueSec?: number; lastPingAt?: string | null };
+  schedule?: { expectedAt?: string | null; overdueSec?: number; cronExpr?: string };
   time?: string;
 }
 
@@ -223,6 +249,8 @@ export function sampleContext(event: string): TemplateContext {
   };
   if (event === 'heartbeat.missed') {
     base.heartbeat = { overdueSec: 360, lastPingAt: '2026-01-15T02:54:00.000Z' };
+  } else if (event === 'job.missed') {
+    base.schedule = { expectedAt: '2026-01-15T03:00:00.000Z', overdueSec: 420, cronExpr: '0 3 * * *' };
   } else {
     const status =
       event === 'job.timeout' ? 'TIMEOUT'

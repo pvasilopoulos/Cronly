@@ -129,7 +129,12 @@ async function tick() {
           if (suppress) {
             await tx.job.update({
               where: { id: job.id },
-              data: { nextRunAt: nextRun(job.cronExpr, job.timezone), lockedAt: null, lockedBy: null },
+              data: {
+                nextRunAt: nextRun(job.cronExpr, job.timezone),
+                lockedAt: null,
+                lockedBy: null,
+                missedAlertedAt: null,
+              },
             });
             logJson({
               level: 'info',
@@ -151,6 +156,9 @@ async function tick() {
             nextRunAt: nextRun(job.cronExpr, job.timezone),
             lockedAt: null,
             lockedBy: null,
+            // The job fired: clear any missed-schedule flag so a later lapse
+            // re-alerts.
+            missedAlertedAt: null,
           },
         });
       });

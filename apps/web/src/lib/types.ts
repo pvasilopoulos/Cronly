@@ -79,6 +79,7 @@ export interface JobDetail extends Job {
   payload: Record<string, unknown>;
   concurrencyKey: string | null;
   overlapPolicy: OverlapPolicy;
+  missedAlertEnabled: boolean;
   createdBy?: string | null;
 }
 
@@ -338,7 +339,7 @@ export interface TemplateCatalogChannel {
 export interface TemplateVariable {
   key: string;
   label: string;
-  scope: 'all' | 'failure' | 'heartbeat';
+  scope: 'all' | 'failure' | 'heartbeat' | 'schedule';
   sample: string;
 }
 export interface EffectiveTemplate {

@@ -15,6 +15,7 @@ export const NOTIFICATION_EVENTS = [
   { key: 'job.failed', label: 'Job failed', severity: 'CRITICAL', default: true },
   { key: 'job.timeout', label: 'Job timed out', severity: 'CRITICAL', default: true },
   { key: 'job.dead_letter', label: 'Job dead-lettered', severity: 'CRITICAL', default: true },
+  { key: 'job.missed', label: 'Scheduled run missed', severity: 'WARNING', default: true },
   { key: 'heartbeat.missed', label: 'Heartbeat missed', severity: 'WARNING', default: true },
   { key: 'response.2xx', label: 'HTTP response 2xx (success)', severity: 'INFO', default: false },
   { key: 'response.3xx', label: 'HTTP response 3xx (redirect)', severity: 'INFO', default: false },

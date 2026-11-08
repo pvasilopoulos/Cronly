@@ -801,6 +801,7 @@ function JobDrawer({
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
   const [overlapPolicy, setOverlapPolicy] = useState<OverlapPolicy>('ALLOW');
+  const [missedAlertEnabled, setMissedAlertEnabled] = useState(true);
   const [values, setValues] = useState<Record<string, string>>({});
 
   // Reseed the editor whenever fresh detail arrives and we're not mid-edit.
@@ -818,6 +819,7 @@ function JobDrawer({
     setStartsAt(isoToLocal(detail.startsAt));
     setEndsAt(isoToLocal(detail.endsAt));
     setOverlapPolicy(detail.overlapPolicy ?? 'ALLOW');
+    setMissedAlertEnabled(detail.missedAlertEnabled ?? true);
     if (def) setValues(payloadToValues(def, detail.payload));
   }, [detail, editing, def]);
 
@@ -838,6 +840,7 @@ function JobDrawer({
       startsAt !== isoToLocal(detail.startsAt) ||
       endsAt !== isoToLocal(detail.endsAt) ||
       overlapPolicy !== (detail.overlapPolicy ?? 'ALLOW') ||
+      missedAlertEnabled !== (detail.missedAlertEnabled ?? true) ||
       (def ? JSON.stringify(buildPayload(def, values)) !== JSON.stringify(detail.payload ?? {}) : false));
 
   function setField(n: string, v: string) {
@@ -888,6 +891,7 @@ function JobDrawer({
           maxRetries: mr,
           timeoutMs: to,
           overlapPolicy,
+          missedAlertEnabled,
           description: description.trim(),
           runbookUrl: runbookUrl.trim(),
           startsAt: startsAt ? startIso : '',
@@ -926,6 +930,7 @@ function JobDrawer({
     setStartsAt(isoToLocal(detail.startsAt));
     setEndsAt(isoToLocal(detail.endsAt));
     setOverlapPolicy(detail.overlapPolicy ?? 'ALLOW');
+    setMissedAlertEnabled(detail.missedAlertEnabled ?? true);
     if (def) setValues(payloadToValues(def, detail.payload));
   }
 
@@ -1026,6 +1031,10 @@ function JobDrawer({
                   <div>
                     <dt className="text-[11px] uppercase tracking-wide text-faint">On overlap</dt>
                     <dd className="text-muted">{OVERLAP_LABEL[detail?.overlapPolicy ?? 'ALLOW']}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] uppercase tracking-wide text-faint">Missed-run alert</dt>
+                    <dd className="text-muted">{(detail?.missedAlertEnabled ?? true) ? 'On' : 'Off'}</dd>
                   </div>
                 </div>
                 {detail?.tags && detail.tags.length > 0 && (
@@ -1174,6 +1183,21 @@ function JobDrawer({
                     <option value="SKIP">Skip this run</option>
                     <option value="QUEUE">Queue — run after the current one finishes</option>
                   </select>
+                </label>
+
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={missedAlertEnabled}
+                    onChange={(e) => setMissedAlertEnabled(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span className="text-muted">
+                    <span className="font-medium">Alert if a scheduled run is missed</span>
+                    <span className="block text-[12px] text-faint">
+                      Notifies this job’s alert channels if the scheduler never fires a run on time (e.g. downtime).
+                    </span>
+                  </span>
                 </label>
 
                 <label className="flex flex-col gap-1 text-sm">
@@ -1620,6 +1644,7 @@ function CreateJobModal({
   const [timeoutMs, setTimeoutMs] = useState(String(template?.timeoutMs ?? 30000));
   const [concurrencyKey, setConcurrencyKey] = useState(template?.concurrencyKey ?? '');
   const [overlapPolicy, setOverlapPolicy] = useState<OverlapPolicy>(template?.overlapPolicy ?? 'ALLOW');
+  const [missedAlertEnabled, setMissedAlertEnabled] = useState(template?.missedAlertEnabled ?? true);
   const [startPaused, setStartPaused] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1682,6 +1707,7 @@ function CreateJobModal({
           timeoutMs: to,
           concurrencyKey: concurrencyKey.trim() || undefined,
           overlapPolicy,
+          missedAlertEnabled,
           enabled: startPaused ? false : undefined,
           description: description.trim() || undefined,
           runbookUrl: runbookUrl.trim() || undefined,
@@ -1902,6 +1928,10 @@ function CreateJobModal({
                     <option value="QUEUE">Queue — run after the current one finishes</option>
                   </select>
                 </Field>
+                <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line bg-surface2/50 px-3 py-2.5 text-sm">
+                  <input type="checkbox" checked={missedAlertEnabled} onChange={(e) => setMissedAlertEnabled(e.target.checked)} className="h-4 w-4 accent-accent" />
+                  <span>Alert if a scheduled run is missed (e.g. scheduler downtime)</span>
+                </label>
                 <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line bg-surface2/50 px-3 py-2.5 text-sm">
                   <input type="checkbox" checked={startPaused} onChange={(e) => setStartPaused(e.target.checked)} className="h-4 w-4 accent-accent" />
                   <span>Create paused (don’t schedule until resumed)</span>

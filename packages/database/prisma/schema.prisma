@@ -360,6 +360,14 @@ model Job {
   heartbeatState       HeartbeatState @default(OK)
   heartbeatAlertedAt   DateTime?
 
+  // ── Missed-schedule monitor ──
+  // When enabled, the worker alerts once if a run is overdue (the scheduler never
+  // fired it — e.g. downtime) by more than MISSED_GRACE_SEC. missedAlertedAt marks
+  // that we've alerted for the current lapse; it is cleared the moment the job
+  // fires again, so a later miss re-alerts.
+  missedAlertEnabled Boolean   @default(true)
+  missedAlertedAt    DateTime?
+
   createdBy      String?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt

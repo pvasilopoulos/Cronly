@@ -7,11 +7,12 @@ import { sendPush, type PushSub } from './push';
 // policy row uses the defaults (all events on, no quiet hours). The console
 // polls these and raises browser popups client-side.
 
-const DEFAULT_EVENTS = ['job.failed', 'job.timeout', 'job.dead_letter', 'heartbeat.missed'];
+const DEFAULT_EVENTS = ['job.failed', 'job.timeout', 'job.dead_letter', 'job.missed', 'heartbeat.missed'];
 const SEVERITY: Record<string, string> = {
   'job.failed': 'CRITICAL',
   'job.timeout': 'CRITICAL',
   'job.dead_letter': 'CRITICAL',
+  'job.missed': 'WARNING',
   'heartbeat.missed': 'WARNING',
   'response.2xx': 'INFO',
   'response.3xx': 'INFO',

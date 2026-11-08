@@ -7,6 +7,7 @@ import { resolvePayloadSecrets } from './secrets';
 import { maybeAlert } from './alerts';
 import { notifyTenant } from './notifications';
 import { monitorHeartbeatsOnce } from './heartbeat';
+import { monitorMissedSchedulesOnce } from './missed';
 import { digestSweepOnce } from './digest';
 import { logJson } from './logger';
 
@@ -324,6 +325,16 @@ async function monitorHeartbeats() {
   }
 }
 
+// Missed-schedule monitor: flag + alert jobs the scheduler never fired on time
+// (e.g. downtime). Atomic claim → safe to run in every worker instance.
+async function monitorMissed() {
+  try {
+    await monitorMissedSchedulesOnce();
+  } catch (err: any) {
+    console.error('[missed] monitor error', err?.message ?? err);
+  }
+}
+
 // Daily-digest sweep: fire each tenant's digest once, at its local hour. The
 // send is claimed atomically, so running this in every worker instance is safe.
 async function digestSweep() {
@@ -342,6 +353,10 @@ const heartbeatTimer = setInterval(monitorHeartbeats, HEARTBEAT_MONITOR_MS);
 setTimeout(monitorHeartbeats, 5000);
 console.log(`CronApp worker — heartbeat monitor every ${HEARTBEAT_MONITOR_MS}ms`);
 
+const missedTimer = setInterval(monitorMissed, HEARTBEAT_MONITOR_MS);
+setTimeout(monitorMissed, 8000);
+console.log(`CronApp worker — missed-schedule monitor every ${HEARTBEAT_MONITOR_MS}ms`);
+
 const digestTimer = setInterval(digestSweep, DIGEST_SWEEP_MS);
 setTimeout(digestSweep, 15000);
 console.log(`CronApp worker — digest sweep every ${DIGEST_SWEEP_MS}ms`);
@@ -349,6 +364,7 @@ console.log(`CronApp worker — digest sweep every ${DIGEST_SWEEP_MS}ms`);
 const shutdown = async () => {
   clearInterval(pollTimer);
   clearInterval(heartbeatTimer);
+  clearInterval(missedTimer);
   clearInterval(digestTimer);
   await getPrisma().$disconnect();
   process.exit(0);
