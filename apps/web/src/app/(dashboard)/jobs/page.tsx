@@ -5,7 +5,7 @@ import useSWR, { mutate as globalMutate } from 'swr';
 import { api, fetcher } from '@/lib/api';
 import { usePermissions } from '@/lib/permissions';
 import { fmtAgo, fmtMs } from '@/lib/format';
-import type { Job, JobDetail, Run, RunStatus, Heartbeat, NotificationChannel } from '@/lib/types';
+import type { Job, JobDetail, Run, RunStatus, Heartbeat, NotificationChannel, OverlapPolicy } from '@/lib/types';
 import { Cron, JobPill, RunPill, Spinner, Toggle, EmptyState } from '@/components/ui';
 import { ResponseViewer } from '@/components/ResponseViewer';
 import { JobNotifications } from '@/components/JobNotifications';
@@ -16,6 +16,12 @@ import { HANDLER_CATALOG, getHandler, validatePayload, type HandlerDef } from '@
 
 type StatusFilter = 'all' | 'active' | 'paused';
 type SortKey = 'name' | 'next' | 'handler';
+
+const OVERLAP_LABEL: Record<OverlapPolicy, string> = {
+  ALLOW: 'Allow overlap',
+  SKIP: 'Skip if running',
+  QUEUE: 'Queue (run after)',
+};
 
 const UNGROUPED_KEY = '__ungrouped';
 
@@ -794,6 +800,7 @@ function JobDrawer({
   const [runbookUrl, setRunbookUrl] = useState('');
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
+  const [overlapPolicy, setOverlapPolicy] = useState<OverlapPolicy>('ALLOW');
   const [values, setValues] = useState<Record<string, string>>({});
 
   // Reseed the editor whenever fresh detail arrives and we're not mid-edit.
@@ -810,6 +817,7 @@ function JobDrawer({
     setRunbookUrl(detail.runbookUrl ?? '');
     setStartsAt(isoToLocal(detail.startsAt));
     setEndsAt(isoToLocal(detail.endsAt));
+    setOverlapPolicy(detail.overlapPolicy ?? 'ALLOW');
     if (def) setValues(payloadToValues(def, detail.payload));
   }, [detail, editing, def]);
 
@@ -829,6 +837,7 @@ function JobDrawer({
       runbookUrl !== (detail.runbookUrl ?? '') ||
       startsAt !== isoToLocal(detail.startsAt) ||
       endsAt !== isoToLocal(detail.endsAt) ||
+      overlapPolicy !== (detail.overlapPolicy ?? 'ALLOW') ||
       (def ? JSON.stringify(buildPayload(def, values)) !== JSON.stringify(detail.payload ?? {}) : false));
 
   function setField(n: string, v: string) {
@@ -878,6 +887,7 @@ function JobDrawer({
           tags: tagList,
           maxRetries: mr,
           timeoutMs: to,
+          overlapPolicy,
           description: description.trim(),
           runbookUrl: runbookUrl.trim(),
           startsAt: startsAt ? startIso : '',
@@ -915,6 +925,7 @@ function JobDrawer({
     setRunbookUrl(detail.runbookUrl ?? '');
     setStartsAt(isoToLocal(detail.startsAt));
     setEndsAt(isoToLocal(detail.endsAt));
+    setOverlapPolicy(detail.overlapPolicy ?? 'ALLOW');
     if (def) setValues(payloadToValues(def, detail.payload));
   }
 
@@ -1011,6 +1022,10 @@ function JobDrawer({
                   <div>
                     <dt className="text-[11px] uppercase tracking-wide text-faint">Timeout</dt>
                     <dd className="text-muted">{detail ? `${Math.round(detail.timeoutMs / 1000)}s` : '—'}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-[11px] uppercase tracking-wide text-faint">On overlap</dt>
+                    <dd className="text-muted">{OVERLAP_LABEL[detail?.overlapPolicy ?? 'ALLOW']}</dd>
                   </div>
                 </div>
                 {detail?.tags && detail.tags.length > 0 && (
@@ -1147,6 +1162,19 @@ function JobDrawer({
                     />
                   </label>
                 </div>
+
+                <label className="flex flex-col gap-1 text-sm">
+                  <span className="font-medium text-muted">When a previous run is still active</span>
+                  <select
+                    value={overlapPolicy}
+                    onChange={(e) => setOverlapPolicy(e.target.value as OverlapPolicy)}
+                    className="w-full rounded-lg border border-line bg-surface px-3 py-2 outline-none focus:border-accent"
+                  >
+                    <option value="ALLOW">Allow overlap — run anyway</option>
+                    <option value="SKIP">Skip this run</option>
+                    <option value="QUEUE">Queue — run after the current one finishes</option>
+                  </select>
+                </label>
 
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-muted">Description</span>
@@ -1591,6 +1619,7 @@ function CreateJobModal({
   const [maxRetries, setMaxRetries] = useState(String(template?.maxRetries ?? 3));
   const [timeoutMs, setTimeoutMs] = useState(String(template?.timeoutMs ?? 30000));
   const [concurrencyKey, setConcurrencyKey] = useState(template?.concurrencyKey ?? '');
+  const [overlapPolicy, setOverlapPolicy] = useState<OverlapPolicy>(template?.overlapPolicy ?? 'ALLOW');
   const [startPaused, setStartPaused] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1652,6 +1681,7 @@ function CreateJobModal({
           maxRetries: mr,
           timeoutMs: to,
           concurrencyKey: concurrencyKey.trim() || undefined,
+          overlapPolicy,
           enabled: startPaused ? false : undefined,
           description: description.trim() || undefined,
           runbookUrl: runbookUrl.trim() || undefined,
@@ -1860,6 +1890,17 @@ function CreateJobModal({
                     placeholder="Jobs sharing a key never run at the same time"
                     className={windowCls}
                   />
+                </Field>
+                <Field label="When a previous run is still active">
+                  <select
+                    value={overlapPolicy}
+                    onChange={(e) => setOverlapPolicy(e.target.value as OverlapPolicy)}
+                    className={windowCls}
+                  >
+                    <option value="ALLOW">Allow overlap — run anyway</option>
+                    <option value="SKIP">Skip this run</option>
+                    <option value="QUEUE">Queue — run after the current one finishes</option>
+                  </select>
                 </Field>
                 <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line bg-surface2/50 px-3 py-2.5 text-sm">
                   <input type="checkbox" checked={startPaused} onChange={(e) => setStartPaused(e.target.checked)} className="h-4 w-4 accent-accent" />

@@ -21,6 +21,7 @@ interface ClaimedJob {
   tenantId: string;
   cronExpr: string;
   timezone: string;
+  overlapPolicy: string;
 }
 
 interface SuppressedJob extends ClaimedJob {
@@ -76,7 +77,7 @@ async function tick() {
 
     const claimed = await prisma.$transaction(async (tx) => {
       const rows = await tx.$queryRaw<ClaimedJob[]>(Prisma.sql`
-        SELECT id, tenantId, cronExpr, timezone
+        SELECT id, tenantId, cronExpr, timezone, overlapPolicy
         FROM Job j
         WHERE enabled = true
           AND status = 'ACTIVE'
@@ -114,6 +115,32 @@ async function tick() {
       // Commit the QUEUED run AND advance the schedule in one transaction. The
       // run row is the queue entry — a worker picks it up on its next poll.
       await prisma.$transaction(async (tx) => {
+        // Overlap policy: when a previous run of this job is still active, SKIP
+        // drops this occurrence and QUEUE keeps at most one run waiting behind
+        // the running one (so slow jobs don't pile up). The schedule still
+        // advances, so the job keeps its cadence. (QUEUE's actual no-overlap
+        // guarantee is enforced at claim time in the worker.)
+        if (job.overlapPolicy !== 'ALLOW') {
+          const [running, queued] = await Promise.all([
+            tx.jobRun.count({ where: { jobId: job.id, status: 'RUNNING' } }),
+            tx.jobRun.count({ where: { jobId: job.id, status: 'QUEUED' } }),
+          ]);
+          const suppress = job.overlapPolicy === 'SKIP' ? running + queued > 0 : queued > 0;
+          if (suppress) {
+            await tx.job.update({
+              where: { id: job.id },
+              data: { nextRunAt: nextRun(job.cronExpr, job.timezone), lockedAt: null, lockedBy: null },
+            });
+            logJson({
+              level: 'info',
+              msg: 'overlap_suppressed',
+              instance: INSTANCE,
+              jobId: job.id,
+              policy: job.overlapPolicy,
+            });
+            return;
+          }
+        }
         await tx.jobRun.create({
           data: { jobId: job.id, tenantId: job.tenantId, status: 'QUEUED', scheduledAt },
         });

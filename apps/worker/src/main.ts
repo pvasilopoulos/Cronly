@@ -25,6 +25,7 @@ interface Data {
   tenantId: string;
   attempt: number;
   concurrencyKey: string | null;
+  overlapPolicy: string;
 }
 
 async function persistResponse(
@@ -98,7 +99,8 @@ let inFlight = 0;
  */
 async function claimRun(c: Data): Promise<boolean> {
   const concLimit = await tenantConcurrencyLimit(c.tenantId);
-  const needGate = !isUnlimited(concLimit) || !!c.concurrencyKey;
+  const isQueuePolicy = c.overlapPolicy === 'QUEUE';
+  const needGate = !isUnlimited(concLimit) || !!c.concurrencyKey || isQueuePolicy;
   const prisma = getPrisma();
   return prisma.$transaction(async (tx) => {
     if (needGate) {
@@ -116,6 +118,17 @@ async function claimRun(c: Data): Promise<boolean> {
           WHERE jr.status = 'RUNNING'
             AND j.tenantId = ${c.tenantId}
             AND j.concurrencyKey = ${c.concurrencyKey}
+          LIMIT 1
+        `);
+        if (busy.length > 0) return false;
+      }
+      if (isQueuePolicy) {
+        // overlapPolicy=QUEUE: this job never runs two at once. If another run of
+        // the SAME job is RUNNING, leave this one QUEUED — a later poll claims it
+        // once the current run finishes.
+        const busy = await tx.$queryRaw<{ one: number }[]>(Prisma.sql`
+          SELECT 1 AS one FROM JobRun
+          WHERE status = 'RUNNING' AND jobId = ${c.jobId}
           LIMIT 1
         `);
         if (busy.length > 0) return false;
@@ -276,7 +289,8 @@ async function poll(): Promise<void> {
     const candidates = await prisma.$transaction((tx) =>
       tx.$queryRaw<Data[]>(Prisma.sql`
         SELECT jr.id AS runId, jr.jobId AS jobId, jr.tenantId AS tenantId,
-               jr.attempt AS attempt, j.concurrencyKey AS concurrencyKey
+               jr.attempt AS attempt, j.concurrencyKey AS concurrencyKey,
+               j.overlapPolicy AS overlapPolicy
         FROM JobRun jr JOIN Job j ON jr.jobId = j.id
         WHERE jr.status = 'QUEUED' AND jr.scheduledAt <= UTC_TIMESTAMP()
         ORDER BY jr.scheduledAt ASC

@@ -43,6 +43,14 @@ enum MembershipStatus {
   SUSPENDED
 }
 
+// How a new scheduled run behaves when a previous run of the SAME job is still
+// active (QUEUED or RUNNING) when the next occurrence is due.
+enum OverlapPolicy {
+  ALLOW // run anyway — overlapping runs are permitted (the default)
+  SKIP  // drop this occurrence; advance to the next scheduled time
+  QUEUE // let it wait and run after the current one finishes (no overlap)
+}
+
 enum JobStatus {
   ACTIVE
   PAUSED
@@ -334,6 +342,10 @@ model Job {
   timeoutMs      Int       @default(30000)
   // Jobs sharing a concurrencyKey never run in parallel (per tenant).
   concurrencyKey String?
+  // What to do when a previous run of THIS job is still active (QUEUED/RUNNING)
+  // at the next scheduled tick: ALLOW (overlap), SKIP (drop this occurrence) or
+  // QUEUE (run it after the current one finishes — no overlap).
+  overlapPolicy  OverlapPolicy @default(ALLOW)
 
   // ── Heartbeat / dead-man's-switch ──
   // When enabled, the job must report liveness at least every

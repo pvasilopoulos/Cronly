@@ -72,10 +72,13 @@ export interface Job {
   heartbeatState?: HeartbeatState;
 }
 
+export type OverlapPolicy = 'ALLOW' | 'SKIP' | 'QUEUE';
+
 /** Full job row from GET /jobs/:id — includes the handler payload for editing. */
 export interface JobDetail extends Job {
   payload: Record<string, unknown>;
   concurrencyKey: string | null;
+  overlapPolicy: OverlapPolicy;
   createdBy?: string | null;
 }
 
